@@ -1,0 +1,8 @@
+Short:        Run PCI graphics card BIOS on the Amiga
+Author:       stefan.reinauer@coreboot.org (Stefan Reinauer)
+Uploader:     stefan.reinauer@coreboot.org (Stefan Reinauer)
+Type:         driver/video
+Version:      [VERSION]
+Requires:     68020+, AmigaOS 3.0+, openpci.library 14+
+Architecture: m68k-amigaos >= 3.0.0
+

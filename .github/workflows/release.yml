@@ -1,0 +1,192 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v* tag to build and release
+        required: true
+        type: string
+      aminet:
+        description: Also upload this tag to Aminet
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+  RELEASE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
+
+jobs:
+  build:
+    name: Build release archive
+    runs-on: ubuntu-latest
+    container: stefanreinauer/amiga-gcc:gcc-v16.2
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+
+    steps:
+      - name: Validate release tag
+        id: version
+        run: |
+          set -eu
+          if ! printf '%s\n' "${RELEASE_TAG}" |
+              grep -Eq '^v[0-9]+\.[0-9]+(-[A-Za-z0-9]+)?$'; then
+            echo "Release tag must look like v2.4 or v2.4-rc1: ${RELEASE_TAG}" >&2
+            exit 1
+          fi
+          version="${RELEASE_TAG#v}"
+          case "${version}" in
+            *-*) prerelease=true ;;
+            *) prerelease=false ;;
+          esac
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.RELEASE_REF }}
+
+      - name: Mark git directory as safe
+        run: git config --global --add safe.directory '*'
+
+      # The action comes from the tag, so tags made before it existed
+      # cannot be rebuilt here.
+      - name: Fetch OpenPCI SDK
+        uses: ./.github/actions/openpci-sdk
+
+      - name: Build and test
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        # Vamos raises instead of failing Seek() on a pipe, and the test
+        # programs seek their output, so the log goes to a file first.
+        run: |
+          make version
+          make -j"$(nproc)" all
+          status=0
+          make check > build/check.log 2>&1 || status=$?
+          cat build/check.log
+          exit "${status}"
+
+      - name: Build release archive
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: make release
+
+      - name: Check library version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -eu
+          number="$(printf '%s\n' "${VERSION}" | sed 's/-.*//')"
+          ident="$(grep -ao 'pciinit\.library [0-9][ -~]*' build/pciinit.library)"
+          echo "${ident}"
+          case "${ident}" in
+            "pciinit.library ${number} ("*")") ;;
+            *)
+              echo "pciinit.library ID string does not match ${VERSION}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Collect release files
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -eu
+          mkdir -p dist
+          cp "build/release/pciinit-${VERSION}.lha" dist/
+          cp "build/release/pciinit-${VERSION}.lha.sha256" dist/
+          cp docs/release.txt dist/release.txt
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: dist/
+          if-no-files-found: error
+
+  github-release:
+    name: Create GitHub draft release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: dist
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: pciinit ${{ needs.build.outputs.version }}
+          draft: true
+          prerelease: ${{ needs.build.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+          files: |
+            dist/pciinit-${{ needs.build.outputs.version }}.lha
+            dist/pciinit-${{ needs.build.outputs.version }}.lha.sha256
+
+  aminet:
+    name: Upload to Aminet
+    needs: build
+    # Pre-release tags (v2.4-rc1) stay off Aminet; manual runs opt in.
+    if: >-
+      needs.build.outputs.prerelease == 'false' &&
+      (github.event_name == 'push' || github.event.inputs.aminet == 'true')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: aminet-release
+      cancel-in-progress: false
+
+    steps:
+      # The readme header comes from the workflow revision and the body
+      # from the tag's docs/release.txt.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: dist
+
+      - name: Prepare Aminet upload files
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -eu
+          mkdir -p aminet
+          cp "dist/pciinit-${VERSION}.lha" aminet/pciinit.lha
+          sed "s/\[VERSION\]/${VERSION}/" docs/aminet.readme > aminet/pciinit.readme
+          cat dist/release.txt >> aminet/pciinit.readme
+          if awk 'length($0) > 78 { bad = 1 } END { exit !bad }' aminet/pciinit.readme; then
+            echo "Aminet readme lines must not exceed 78 characters" >&2
+            exit 1
+          fi
+          if LC_ALL=C grep -n '[^ -~]' aminet/pciinit.readme; then
+            echo "Aminet readme must be plain ASCII" >&2
+            exit 1
+          fi
+          cat aminet/pciinit.readme
+
+      - name: Upload to Aminet
+        uses: sidick/aminet-release-action@v1
+        with:
+          filename: aminet/pciinit.lha
+          readme: aminet/pciinit.readme
+          category: driver/video

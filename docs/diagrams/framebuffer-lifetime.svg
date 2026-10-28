@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="560" viewBox="0 0 960 560" role="img" aria-labelledby="title desc">
+<title id="title">Framebuffer translation and lifetime</title>
+<desc id="desc">The retained ROM context selects a mode. MapFramebuffer resolves the PCI address through OpenPCI. A CPU pointer is valid only until UnmapFramebuffer, which restores transport state and allows another BIOS call or context deletion.</desc>
+<defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0 0L10 4L0 8Z" fill="#50617a"/></marker></defs>
+<rect width="960" height="560" fill="#f5f7fb"/>
+<g font-family="sans-serif" fill="#20314b">
+<text x="40" y="44" font-size="25" font-weight="bold">Framebuffer address translation and lifetime</text>
+<g stroke="#91a5bf" stroke-width="2" fill="#fff">
+<rect x="40" y="80" width="260" height="110" rx="10"/>
+<rect x="350" y="80" width="260" height="110" rx="10"/>
+<rect x="660" y="80" width="260" height="110" rx="10"/>
+</g>
+<g font-size="17" text-anchor="middle">
+<text x="170" y="112" font-weight="bold">Retained ROM context</text>
+<text x="170" y="142">INT 10h selects the mode</text>
+<text x="170" y="169">IVT, BDA and shadow persist</text>
+<text x="480" y="112" font-weight="bold">Resolve PCI address</text>
+<text x="480" y="142">VBE PhysBasePtr, or</text>
+<text x="480" y="169">assigned S3 BAR0 fallback</text>
+<text x="790" y="112" font-weight="bold">MapFramebuffer</text>
+<text x="790" y="142">Validate visible VRAM extent</text>
+<text x="790" y="169">OpenPCI ObtainPCIRegion</text>
+</g>
+<g stroke="#50617a" stroke-width="2" fill="none" marker-end="url(#arrow)">
+<path d="M300 135H345"/><path d="M610 135H655"/><path d="M790 190V235"/>
+</g>
+<rect x="350" y="240" width="570" height="135" rx="10" fill="#e6f3ed" stroke="#4a8a68" stroke-width="2"/>
+<text x="375" y="272" font-size="20" font-weight="bold">CPU pointer valid: access pixels, then release</text>
+<g font-size="17"><text x="375" y="301">Pitch × height bytes · dimensions · RGB masks · byte order</text>
+<text x="375" y="329">One mapping library-wide; no BIOS calls or context deletion</text>
+<text x="375" y="356">No waiting, DOS calls, or access to other PCI regions</text></g>
+<path d="M635 375V420" stroke="#50617a" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<rect x="350" y="425" width="570" height="95" rx="10" fill="#fff" stroke="#91a5bf" stroke-width="2"/>
+<text x="375" y="456" font-size="20" font-weight="bold">UnmapFramebuffer: pointer becomes invalid</text>
+<text x="375" y="484" font-size="17">ReleasePCIRegion; restore registers and PCI command</text>
+<text x="375" y="507" font-size="17">Another BIOS call or context deletion is now permitted</text>
+<path d="M350 470H320V215H170V195" stroke="#50617a" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="46" y="317" font-size="17">Next mode change</text>
+<text x="46" y="343" font-size="17">reuses the ROM context</text>
+</g></svg>

@@ -1,0 +1,52 @@
+# The p96drivers style (Google based) reduced to its C options.
+Language:        C
+BasedOnStyle:    Google
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: true
+AlignConsecutiveMacros: true
+AlignEscapedNewlines: Left
+AlignOperands:   true
+AlignTrailingComments: true
+AllowAllParametersOfDeclarationOnNextLine: false
+AllowShortBlocksOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Inline
+AlwaysBreakBeforeMultilineStrings: true
+BreakBeforeBinaryOperators: None
+BreakBeforeTernaryOperators: true
+BinPackParameters: true
+BinPackArguments: true
+ColumnLimit:     120
+DerivePointerAlignment: true
+PointerAlignment: Left
+IndentCaseLabels: false
+IndentWrappedFunctionNames: false
+MaxEmptyLinesToKeep: 1
+KeepEmptyLinesAtTheStartOfBlocks: false
+PenaltyBreakBeforeFirstCallParameter: 1
+PenaltyBreakComment: 300
+PenaltyBreakString: 1000
+PenaltyExcessCharacter: 1000000
+PenaltyReturnTypeOnItsOwnLine: 200
+SpacesBeforeTrailingComments: 2
+IndentWidth:     4
+TabWidth:        4
+UseTab:          Never
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterControlStatement: false
+  AfterEnum: true
+  AfterStruct: true
+  AfterFunction: true
+  BeforeElse: false
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+SpaceInEmptyParentheses: false
+SpacesInCStyleCastParentheses: false
+SpaceAfterCStyleCast: false
+SpaceBeforeAssignmentOperators: true
+ContinuationIndentWidth: 4
+SpaceBeforeParens: ControlStatements
+SortIncludes: false

@@ -1,0 +1,20 @@
+##base _PCIInitBase
+##bias 30
+##public
+LoadOptionROMFromFile(path,tags)(a0,a1)
+LoadOptionROMFromCard(board,tags)(a0,a1)
+FreeOptionROM(image)(a0)
+GetOptionROMInfo(image,info)(a0,a1)
+CreatePCIContext(board,tags)(a0,a1)
+DeletePCIContext(ctx)(a0)
+RunOptionROM(ctx,image)(a0,a1)
+GetPCIContextInfo(ctx,info)(a0,a1)
+GetVBEInfo(ctx,info)(a0,a1)
+GetVBEModeInfo(ctx,mode,info)(a0,d0,a1)
+SetVBEMode(ctx,mode,flags)(a0,d0,d1)
+GetCurrentVBEMode(ctx,mode)(a0,a1)
+MapFramebuffer(ctx,info)(a0,a1)
+UnmapFramebuffer(ctx)(a0)
+WriteFramebuffer(ctx,offset,source,bytes)(a0,d0,a1,d1)
+ReadFramebuffer(ctx,offset,destination,bytes)(a0,d0,a1,d1)
+##end

@@ -1,0 +1,5 @@
+/build/
+/fixture/out/
+__pycache__/
+/*.rom
+/*.bin

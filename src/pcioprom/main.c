@@ -1,0 +1,430 @@
+#include <proto/exec.h>
+#include <exec/tasks.h>
+#include <exec/memory.h>
+#include <proto/pciinit.h>
+#include "private/openpci_calls.h"
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <errno.h>
+#include "private/pattern.h"
+#include "private/boing.h"
+#include "private/oprom_config.h"
+struct Library *PCIInitBase;
+static const char *status_name(uint32_t status)
+{
+    static const char *const names[] = {"ok",
+                                        "bad argument",
+                                        "out of memory",
+                                        "I/O error",
+                                        "malformed ROM",
+                                        "unsupported ROM",
+                                        "OpenPCI unavailable",
+                                        "card owned",
+                                        "no ROM",
+                                        "ROM identity mismatch",
+                                        "hardware execution backend unavailable",
+                                        "invalid context state",
+                                        "execution failed",
+                                        "VBE service failed",
+                                        "unsupported graphics mode"};
+    return status < sizeof(names) / sizeof(names[0]) ? names[status] : "unknown status";
+}
+static int list_modes, pattern, no_post, trace_accesses;
+static uint32_t modes[16];
+static unsigned mode_count;
+static const char *rom_path, *config_path, *dump_path;
+static int arguments(int argc, char **argv)
+{
+    int i;
+    for (i = 1; i < argc; ++i) {
+        if (!strcmp(argv[i], "--no-post"))
+            no_post = 1;
+        else if (!strcmp(argv[i], "--list-modes"))
+            list_modes = 1;
+        else if (!strcmp(argv[i], "--pattern"))
+            pattern = 1;
+        else if (!strcmp(argv[i], "--trace"))
+            trace_accesses = 1;
+        else if (!strcmp(argv[i], "--config")) {
+            if (++i == argc || config_path)
+                return 0;
+            config_path = argv[i];
+        } else if (!strcmp(argv[i], "--dump")) {
+            if (++i == argc || dump_path)
+                return 0;
+            dump_path = argv[i];
+        } else if (!strcmp(argv[i], "--mode")) {
+            char *end;
+            unsigned long mode;
+            if (++i == argc || mode_count == 16 || !argv[i][0])
+                return 0;
+            errno = 0;
+            mode  = strtoul(argv[i], &end, 0);
+            if (errno || *end || mode > 0x3fff)
+                return 0;
+            modes[mode_count++] = mode;
+        } else if (argv[i][0] == '-' || rom_path)
+            return 0;
+        else
+            rom_path = argv[i];
+    }
+    return !(no_post && (list_modes || mode_count || pattern)) && !(pattern && !mode_count) && !(dump_path && rom_path);
+}
+/* A banked mode: draw into RAM, then copy through the ROM's VGA window. */
+static uint32_t banked(PCIInitContext *ctx, const struct PCIInitVBEModeInfo *mode, const struct BoingBall *ball)
+{
+    struct PCIInitFramebuffer fb = {.size = sizeof(fb), .mode = *mode};
+    uint8_t *backing, *row = NULL;
+    uint32_t status, y;
+    int drawn;
+    fb.bytes   = mode->pitch * mode->height;
+    fb.flags   = PI_FB_LITTLE_ENDIAN | (mode->memory_model == 4 ? PI_FB_INDEXED : 0);
+    backing    = malloc(fb.bytes);
+    fb.address = backing;
+    if (!backing)
+        return PI_NO_MEMORY;
+    drawn  = pattern ? draw_pattern(&fb) : boing_draw(ball, &fb, 0);
+    status = drawn ? WriteFramebuffer(ctx, 0, backing, fb.bytes) : PI_OK;
+    if (status == PI_UNSUPPORTED_MAPPING) {
+        free(backing);
+        puts("  DISPLAY: VBE 1.2 banked mode and this bus board has no legacy VGA window;");
+        puts("  nothing drawn (a VBE 2.0 ROM with a linear framebuffer would draw)");
+        return PI_OK;
+    }
+    /* Verify through the window: the first, middle and last rows. */
+    if (!status && drawn && pattern && (row = malloc(mode->pitch)))
+        for (y = 0; y < 3 && drawn; ++y) {
+            uint32_t line = y == 0 ? 0 : y == 1 ? mode->height / 2 : mode->height - 1;
+            status        = ReadFramebuffer(ctx, line * mode->pitch, row, mode->pitch);
+            if (status)
+                break;
+            drawn = !memcmp(row, backing + line * mode->pitch, mode->pitch);
+        }
+    free(row);
+    free(backing);
+    if (status)
+        return status;
+    printf("  FRAMEBUFFER banked bytes=%lu flags=%lu %s=%s\n", (ULONG)fb.bytes, (ULONG)fb.flags,
+           pattern ? "pattern" : "boing", drawn ? (pattern ? "verified" : "drawn") : "FAILED");
+    return drawn ? PI_OK : PI_IO_ERROR;
+}
+static uint32_t display(PCIInitContext *ctx, const struct PCIInitVBEModeInfo *mode)
+{
+    struct PCIInitFramebuffer fb = {.size = sizeof(fb)};
+    struct BoingBall ball        = {0};
+    uint32_t status;
+    int drawn;
+    if (!pattern && mode->memory_model != 6) {
+        puts("  DISPLAY: Boing Ball requires a direct-color mode");
+        return PI_OK;
+    }
+    /* LUT allocation and floating-point initialization precede the mapping. */
+    if (!pattern && !boing_prepare(&ball, mode->width, mode->height))
+        return PI_NO_MEMORY;
+    status = MapFramebuffer(ctx, &fb);
+    if (status == PI_UNSUPPORTED_MAPPING) {
+        uint32_t result = banked(ctx, mode, &ball);
+        boing_release(&ball);
+        return result;
+    }
+    if (status) {
+        boing_release(&ball);
+        return status;
+    }
+    drawn  = pattern ? draw_pattern(&fb) : boing_draw(&ball, &fb, 0);
+    status = UnmapFramebuffer(ctx);
+    boing_release(&ball);
+    if (status)
+        return status;
+    printf("  FRAMEBUFFER PCI=%08lx CPU=%08lx bytes=%lu flags=%lu %s=%s\n", (ULONG)fb.mode.framebuffer_pci,
+           (ULONG)fb.address, (ULONG)fb.bytes, (ULONG)fb.flags, pattern ? "pattern" : "boing",
+           drawn ? (pattern ? "verified" : "drawn") : "FAILED");
+    return drawn ? PI_OK : PI_IO_ERROR;
+}
+static uint32_t graphics(PCIInitContext *ctx)
+{
+    struct PCIInitVBEInfo info   = {.size = sizeof(info)};
+    struct PCIInitVBEModeInfo mi = {.size = sizeof(mi)};
+    uint32_t status, current, flags;
+    unsigned i;
+    if (!list_modes && !mode_count)
+        return PI_OK;
+    status = GetVBEInfo(ctx, &info);
+    if (status)
+        return status;
+    printf("  VBE %u.%u OEM=%s memory=%lu modes=%lu\n", (unsigned)(info.version >> 8), (unsigned)(info.version & 255),
+           info.oem, (ULONG)info.memory_bytes, (ULONG)info.mode_count);
+    if (list_modes)
+        for (i = 0; i < info.mode_count; ++i) {
+            status = GetVBEModeInfo(ctx, info.modes[i], &mi);
+            if (status)
+                return status;
+            printf("  MODE 0x%03lx %lux%lux%lu pitch=%lu model=%lu attributes=%04lx PCI=%08lx\n", (ULONG)mi.mode,
+                   (ULONG)mi.width, (ULONG)mi.height, (ULONG)mi.bits_per_pixel, (ULONG)mi.pitch, (ULONG)mi.memory_model,
+                   (ULONG)mi.attributes, (ULONG)mi.framebuffer_pci);
+        }
+    for (i = 0; i < mode_count; ++i) {
+        status = GetVBEModeInfo(ctx, modes[i], &mi);
+        if (status)
+            return status;
+        if (pattern && mi.memory_model != 6)
+            return PI_UNSUPPORTED_MODE;
+        flags = info.version >= 0x200 && (mi.attributes & 0x80) ? PI_VBE_LINEAR : 0;
+        /* Both direct-color displays repaint the complete visible area. */
+        if (mi.memory_model == 6)
+            flags |= PI_VBE_KEEP_MEMORY;
+        status = SetVBEMode(ctx, modes[i], flags);
+        if (status)
+            return status;
+        status = GetCurrentVBEMode(ctx, &current);
+        if (status)
+            return status;
+        printf("  SET 0x%03lx current=%04lx %lux%lux%lu pitch=%lu\n", (ULONG)modes[i], (ULONG)current, (ULONG)mi.width,
+               (ULONG)mi.height, (ULONG)mi.bits_per_pixel, (ULONG)mi.pitch);
+        status = display(ctx, &mi);
+        if (status)
+            return status;
+    }
+    status = GetCurrentVBEMode(ctx, &current);
+    if (!status)
+        printf("  CURRENT %04lx\n", (ULONG)current);
+    return status;
+}
+/* Execution result, final registers and, with --trace, the retained access
+ * trace of the last ROM run or BIOS call; returns whether the legacy window
+ * was missed. Without --trace the diagnostics record no entries. */
+static int report(PCIInitContext *ctx, const struct PCIInitDiagnostics *diag)
+{
+    struct PCIInitContextInfo ci = {.size = sizeof(ci)};
+    unsigned n, start, missed = 0;
+    GetPCIContextInfo(ctx, &ci);
+    if (ci.warnings & PI_WARN_NO_LEGACY_WINDOW) {
+        puts("  WARNING: the ROM accessed legacy VGA memory (PCI 0xA0000-0xBFFFF),");
+        puts("  which this PCI bus board cannot forward; reads returned zero and");
+        puts("  writes were dropped. The original Prometheus and the G-REX have");
+        puts("  this limitation; FireStorm, Firebird, Mediator and AmigaPCI do not.");
+        missed = 1;
+    }
+    printf("  CPU stop=%lu instructions=%lu accesses=%lu fault=%08lx op=%lu INT=%lu\n", (ULONG)ci.execution.reason,
+           (ULONG)ci.execution.instructions, (ULONG)ci.execution.accesses, (ULONG)ci.execution.address,
+           (ULONG)ci.execution.operation, (ULONG)ci.execution.interrupt);
+    if (ci.warnings & PI_WARN_MISSING_SERVICE)
+        printf(
+            "  MISSING: the ROM called INT %02lXh AX=%04lXh, a BIOS service neither it nor\n"
+            "  pciinit.library provides; the run stopped there\n",
+            (ULONG)(ci.missing_service >> 16), (ULONG)(ci.missing_service & 0xffff));
+    else if (ci.execution.reason == X86_STOP_FAULT)
+        printf("  FAULT: CPU exception %lu (%s)\n", (ULONG)ci.execution.interrupt,
+               ci.execution.interrupt == 0    ? "divide error"
+               : ci.execution.interrupt == 6  ? "invalid opcode"
+               : ci.execution.interrupt == 13 ? "general protection"
+                                              : "see the x86 exception vectors");
+    else if (ci.execution.reason == X86_STOP_ACCESS)
+        puts("  ACCESS: a memory or port access was refused; see fault= and op= above");
+    else if (ci.execution.reason == X86_STOP_LIMIT || ci.execution.reason == X86_STOP_TIMEOUT)
+        puts("  LIMIT: the ROM did not finish within the instruction, access or time budget");
+    printf("  PC=%04x:%08lx AX=%08lx BX=%08lx CX=%08lx DX=%08lx SI=%08lx DI=%08lx\n", diag->registers.segment[X86_CS],
+           (ULONG)diag->registers.eip, (ULONG)diag->registers.eax, (ULONG)diag->registers.ebx,
+           (ULONG)diag->registers.ecx, (ULONG)diag->registers.edx, (ULONG)diag->registers.esi,
+           (ULONG)diag->registers.edi);
+    printf("  IO=%lu VGA=%lu BAR=%lu INT10=%08lx\n", (ULONG)diag->io_accesses, (ULONG)diag->vga_accesses,
+           (ULONG)diag->bar_accesses, (ULONG)diag->int10_vector);
+    start = diag->count > diag->capacity ? diag->count - diag->capacity : 0;
+    for (n = start; n < diag->count; ++n) {
+        const struct PCIInitTraceEntry *e = &diag->entries[n % diag->capacity];
+        printf("  TRACE op=%lu addr=%08lx width=%lu value=%08lx\n", (ULONG)e->operation, (ULONG)e->address,
+               (ULONG)e->width, (ULONG)e->value);
+    }
+    return missed;
+}
+static __attribute__((noinline)) int run_main(int argc, char **argv)
+{
+    struct Library *pci;
+    struct pci_dev *dev = NULL;
+    unsigned cards = 0, loaded = 0, initialized = 0, blocked = 0, failed = 0, ignored = 0, dumped = 0;
+    struct OpromConfig config;
+    const char *config_source;
+    uint32_t status       = PI_OK;
+    struct TagItem tags[] = {{PII_Error, (ULONG)&status}, {TAG_DONE, 0}};
+    PCIInitImage *file    = NULL;
+    struct PCIInitTraceEntry trace[128];
+    struct PCIInitDiagnostics diag = {.size = sizeof(diag)};
+    struct X86Limits limits        = {sizeof(limits), 10000000, 30000000, 300000, NULL};
+    struct TagItem context_tags[]  = {{PII_Error, (ULONG)&status},
+                                      {PII_Hardware, 1},
+                                      {PII_Diagnostics, (ULONG)&diag},
+                                      {PII_Limits, (ULONG)&limits},
+                                      {TAG_DONE, 0}};
+    if (!arguments(argc, argv)) {
+        puts(
+            "Usage: PCIoprom [--no-post | --list-modes] [--mode number ...] [--pattern] [--trace] [--config file] "
+            "[--dump file] [ROM-file]");
+        puts("Modes accept decimal or 0x-prefixed hex; --pattern requires --mode.");
+        puts("--dump writes the first card ROM, as read from the card, to file.");
+        puts("--trace lists the last 128 I/O, VGA, BAR and interrupt accesses after each run.");
+        puts("Direct-color modes show a Boing Ball by default; --pattern draws test bars.");
+        puts("ENV:/ENVARC:" OPROM_CONFIG_NAME " holds 'Ignore vendor:device' lines (device may be *).");
+        return 20;
+    }
+    if (trace_accesses) {
+        diag.capacity = 128;
+        diag.entries  = trace;
+    }
+    PCIInitBase = OpenLibrary((STRPTR) "pciinit.library", PCIINIT_LIBRARY_VERSION);
+    if (!PCIInitBase) {
+        puts("Cannot open pciinit.library 2");
+        return 20;
+    }
+    pci = op_open(SysBase);
+    if (!pci) {
+        puts("Cannot open openpci.library 14");
+        CloseLibrary(PCIInitBase);
+        return 20;
+    }
+    config_source = oprom_config_load(&config, config_path);
+    if (config_path && !config_source) {
+        printf("Cannot read %s\n", config_path);
+        failed = 1;
+        goto out;
+    }
+    if (config_source)
+        printf("Configuration: %s, %u ignored\n", config_source, config.ignores);
+    if (config.errors)
+        printf("  WARNING: %u rejected configuration line(s); first: %s\n", config.errors, config.error);
+    if (rom_path) {
+        file = LoadOptionROMFromFile(rom_path, tags);
+        if (!file) {
+            printf("File: %s\n", status_name(status));
+            failed = 1;
+            goto out;
+        }
+    }
+    while ((dev = op_find(pci, dev))) {
+        PCIInitImage *image = file;
+        PCIInitContext *ctx;
+        struct PCIInitROMInfo info = {.size = sizeof(info)};
+        ++cards;
+        printf("%lu:%lu.%lu %04x:%04x ", op_attr(pci, dev, PRM_BusNumber), op_attr(pci, dev, PRM_SlotNumber),
+               op_attr(pci, dev, PRM_FunctionNumber), dev->vendor, dev->device);
+        if (oprom_config_ignored(&config, dev->vendor, dev->device)) {
+            puts("ignored by configuration");
+            ++ignored;
+            continue;
+        }
+        if (!image)
+            image = LoadOptionROMFromCard(dev, tags);
+        if (!image) {
+            printf("%s\n", status_name(status));
+            if (status != PI_NO_ROM && status != PI_UNSUPPORTED_ROM && status != PI_CARD_BUSY)
+                ++failed;
+            continue;
+        }
+        GetOptionROMInfo(image, &info);
+        if (file && (info.vendor != dev->vendor || info.device != dev->device)) {
+            puts("file does not match");
+            continue;
+        }
+        ++loaded;
+        printf("ROM %lu bytes, x86 image %lu+%lu\n", (unsigned long)info.source_bytes, (unsigned long)info.image_offset,
+               (unsigned long)info.init_bytes);
+        if (dump_path && !dumped) {
+            FILE *out = fopen(dump_path, "wb");
+            int ok    = out && fwrite(info.source, 1, info.source_bytes, out) == info.source_bytes;
+            if (out && fclose(out))
+                ok = 0;
+            if (ok) {
+                printf("  Dumped %lu bytes to %s\n", (unsigned long)info.source_bytes, dump_path);
+                dumped = 1;
+            } else {
+                printf("  Cannot write %s\n", dump_path);
+                ++failed;
+            }
+        }
+        if (no_post) {
+            puts("  POST: skipped");
+            if (!file)
+                FreeOptionROM(image);
+            continue;
+        }
+        ctx = CreatePCIContext(dev, context_tags);
+        if (ctx) {
+            memset(&diag.registers, 0, sizeof(diag.registers));
+            diag.count = diag.io_accesses = diag.vga_accesses = diag.bar_accesses = diag.int10_vector = 0;
+            status = RunOptionROM(ctx, image);
+            printf("  POST: %s\n", status_name(status));
+            if (report(ctx, &diag))
+                ++blocked;
+            if (status == PI_OK) {
+                ++initialized;
+                status = graphics(ctx);
+                if (status) {
+                    printf("  Graphics: %s\n", status_name(status));
+                    ++failed;
+                    /* The state and trace of the BIOS call that failed. */
+                    report(ctx, &diag);
+                }
+            } else if (status == PI_UNSUPPORTED_MAPPING)
+                ++blocked;
+            else
+                ++failed;
+            if (DeletePCIContext(ctx) != PI_OK) {
+                puts("  Context cleanup failed");
+                ++failed;
+            }
+        } else {
+            printf("  Context: %s\n", status_name(status));
+            ++failed;
+        }
+        if (!file)
+            FreeOptionROM(image);
+    }
+out:
+    if (file)
+        FreeOptionROM(file);
+    CloseLibrary(pci);
+    CloseLibrary(PCIInitBase);
+    printf("PCIOPROM RESULT cards=%u loaded=%u initialized=%u blocked=%u failures=%u ignored=%u\n", cards, loaded,
+           initialized, blocked, failed, ignored);
+    return failed ? 20 : blocked || !loaded ? 5 : 0;
+}
+/* ROM execution and the drawing code run on the caller's stack, and the
+ * Shell default is far smaller than they need: borrow a larger one. Nothing
+ * touched between the two swaps may live on the stack, since the compiler
+ * addresses locals relative to the stack pointer that the swap replaces. */
+#define PCIOPROM_STACK 131072UL
+static struct StackSwapStruct borrowed;
+static int borrowed_argc, borrowed_result;
+static char **borrowed_argv;
+static __attribute__((noinline)) void on_borrowed_stack(void)
+{
+    StackSwap(&borrowed);
+    borrowed_result = run_main(borrowed_argc, borrowed_argv);
+    StackSwap(&borrowed);
+}
+#ifdef __mc68000__
+__attribute__((stkparm))
+#endif
+int main(int argc, char **argv)
+{
+    struct Task *task = FindTask(NULL);
+    APTR stack;
+    if ((ULONG)task->tc_SPUpper - (ULONG)task->tc_SPLower >= PCIOPROM_STACK)
+        return run_main(argc, argv);
+    /* The emulator spends its time on this stack: fast RAM first. */
+    stack = AllocMem(PCIOPROM_STACK, MEMF_FAST | MEMF_PUBLIC);
+    if (!stack)
+        stack = AllocMem(PCIOPROM_STACK, MEMF_PUBLIC);
+    if (!stack) {
+        puts("Cannot allocate a 128 KiB stack");
+        return 20;
+    }
+    borrowed.stk_Lower   = stack;
+    borrowed.stk_Upper   = (ULONG)stack + PCIOPROM_STACK;
+    borrowed.stk_Pointer = (APTR)borrowed.stk_Upper;
+    borrowed_argc        = argc;
+    borrowed_argv        = argv;
+    on_borrowed_stack();
+    FreeMem(stack, PCIOPROM_STACK);
+    return borrowed_result;
+}

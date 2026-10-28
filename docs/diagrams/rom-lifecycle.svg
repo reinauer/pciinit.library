@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="800" viewBox="0 0 1000 800" role="img" aria-labelledby="title desc">
+  <title id="title">Option ROM loading and persistent execution lifecycle</title>
+  <desc id="desc">A file or PCI card provides a validated ROM image. A separate context owns the target card and its emulator. POST runs in that context and leaves installed interrupt handlers available for VBE calls. Deleting the context releases software resources without undoing hardware initialization.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#334155"/></marker>
+    <style>
+      text { font-family: sans-serif; fill: #172554; }
+      .heading { font-size: 26px; font-weight: 700; }
+      .name { font-size: 20px; font-weight: 700; }
+      .body { font-size: 17px; }
+      .label { font-size: 15px; fill: #334155; }
+      .edge { fill: none; stroke: #334155; stroke-width: 2; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect width="1000" height="800" fill="#ffffff"/>
+  <text x="40" y="42" class="heading">Load once, retain BIOS state for later calls</text>
+  <rect x="40" y="80" width="270" height="65" rx="10" fill="#f1f5f9" stroke="#64748b"/>
+  <text x="175" y="107" text-anchor="middle" class="name">ROM file</text>
+  <text x="175" y="131" text-anchor="middle" class="label">LoadOptionROMFromFile()</text>
+  <rect x="350" y="80" width="270" height="65" rx="10" fill="#f1f5f9" stroke="#64748b"/>
+  <text x="485" y="107" text-anchor="middle" class="name">PCI expansion ROM</text>
+  <text x="485" y="131" text-anchor="middle" class="label">LoadOptionROMFromCard()</text>
+  <rect x="660" y="80" width="300" height="65" rx="10" fill="#fef3c7" stroke="#d97706"/>
+  <text x="810" y="107" text-anchor="middle" class="name">OpenPCI board handle</text>
+  <text x="810" y="131" text-anchor="middle" class="label">struct pci_dev *</text>
+  <rect x="120" y="205" width="450" height="80" rx="10" fill="#dbeafe" stroke="#2563eb"/>
+  <text x="345" y="236" text-anchor="middle" class="name">PCIInitImage</text>
+  <text x="345" y="262" text-anchor="middle" class="body">Owned copy · bounds · checksum · x86 image</text>
+  <path d="M175 145 V205" class="edge"/>
+  <path d="M485 145 V205" class="edge"/>
+  <rect x="650" y="205" width="310" height="80" rx="10" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="805" y="236" text-anchor="middle" class="name">CreatePCIContext()</text>
+  <text x="805" y="262" text-anchor="middle" class="body">Own card · create emulator</text>
+  <path d="M810 145 V205" class="edge"/>
+  <rect x="120" y="340" width="840" height="85" rx="10" fill="#dbeafe" stroke="#2563eb"/>
+  <text x="540" y="373" text-anchor="middle" class="name">RunOptionROM(context, image)</text>
+  <text x="540" y="400" text-anchor="middle" class="body">Build BIOS environment · shadow ROM · execute POST with limits</text>
+  <path d="M345 285 V340" class="edge"/>
+  <path d="M805 285 V340" class="edge"/>
+  <rect x="120" y="480" width="840" height="95" rx="10" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="540" y="512" text-anchor="middle" class="name">Persistent initialized context</text>
+  <text x="540" y="538" text-anchor="middle" class="body">Retain shadow ROM, RAM, IVT, BIOS data and card ownership</text>
+  <text x="540" y="561" text-anchor="middle" class="label">GetVBEInfo() · GetVBEModeInfo() · SetVBEMode() through the ROM's INT 10h</text>
+  <path d="M540 425 V480" class="edge"/>
+  <text x="558" y="457" class="label">Successful return</text>
+  <path d="M960 535 H980 V465 H900 V480" class="edge"/>
+  <rect x="120" y="635" width="840" height="70" rx="10" fill="#f1f5f9" stroke="#64748b"/>
+  <text x="540" y="664" text-anchor="middle" class="name">DeletePCIContext()</text>
+  <text x="540" y="690" text-anchor="middle" class="body">Release mappings, emulator, ownership and dependency references</text>
+  <path d="M540 575 V635" class="edge"/>
+  <text x="120" y="740" class="body">The image may be freed after execution has retained its own ROM state.</text>
+  <text x="120" y="768" class="body">Failure or context deletion does not imply that device register writes were undone.</text>
+</svg>

@@ -1,0 +1,24 @@
+Upstream: https://github.com/wfeldt/libx86emu
+Revision: ce81129c57fdfbf690bebc210a8db97d926cc5e7
+Imported: 2026-10-27
+
+LICENSE and LICENSE_INFO retain upstream licensing information. The
+upstream demo/ program and .github/ workflows are not included; the
+upstream Makefile and README.md still mention them.
+
+Amiga integration lives in src/x86emu and src/runtime. Changes to this
+directory are separate commits, so `git log -- third_party/libx86emu`
+lists them:
+
+- bounded 68020 execution with an external clock and no host I/O
+  (X86EMU_EXTERNAL_CLOCK, X86EMU_NO_HOST_IO)
+- optional instruction text generation (X86EMU_NO_DISASSEMBLY)
+- direct instruction fetch and less dispatch work (X86EMU_DIRECT_FETCH,
+  X86EMU_NO_TRACE_FORMATTING)
+- bounded REP MOVS/STOS and REP SCAS callbacks (X86EMU_BULK_STRINGS)
+- an AAM divide error returns after raising the fault
+- cached opcode decoding for the block translator's semantic fallback
+
+The test/ directory holds the upstream regression fixtures, which
+tools/check_blockjit.py runs against both CPU backends. The top-level
+build pins this source; it does not download dependencies.

@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="540" viewBox="0 0 1000 540" role="img" aria-labelledby="title desc">
+<title id="title">x86emu.library backend boundary</title>
+<desc id="desc">The Amiga API enters a common frontend that owns contexts, budgets and callbacks. The default m68k block translator shares complete CPU state with its interpreter fallback; the libx86emu interpreter can also be built alone. One backend is linked into each library.</desc>
+<defs>
+  <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#334155"/></marker>
+  <style>
+    text {font-family:sans-serif;fill:#172554;font-size:18px}
+    .title {font-size:26px;font-weight:700}
+    .name {font-size:22px;font-weight:700}
+    .small {font-size:16px}
+    .edge {fill:none;stroke:#334155;stroke-width:2;marker-end:url(#arrow)}
+  </style>
+</defs>
+<rect width="1000" height="540" fill="white"/>
+<text x="40" y="42" class="title">x86emu.library: stable API, replaceable CPU engine</text>
+<rect x="50" y="75" width="900" height="110" rx="12" fill="#dbeafe" stroke="#2563eb"/>
+<text x="500" y="108" text-anchor="middle" class="name">Common frontend · library vectors</text>
+<text x="500" y="138" text-anchor="middle">Context lifetime · execution limits · cancellation · timer.device</text>
+<text x="500" y="165" text-anchor="middle">Register API · callback policy · stop and fault reporting</text>
+<path d="M270 185 V250" class="edge"/>
+<text x="285" y="222" class="small">Direct backend calls</text>
+<path d="M750 185 V250" class="edge"/>
+<rect x="50" y="250" width="440" height="115" rx="12" fill="#f1f5f9" stroke="#64748b"/>
+<text x="270" y="285" text-anchor="middle" class="name">libx86emu interpreter · nojit</text>
+<text x="270" y="316" text-anchor="middle">Shared adapter · CPU/MSR state</text>
+<text x="270" y="344" text-anchor="middle" class="small">X86_BACKEND=libx86emu</text>
+<rect x="530" y="250" width="420" height="115" rx="12" fill="#dcfce7" stroke="#16a34a"/>
+<text x="740" y="285" text-anchor="middle" class="name">m68k block translator · default</text>
+<text x="740" y="316" text-anchor="middle">Own decoder · cache · native execution</text>
+<text x="740" y="344" text-anchor="middle" class="small">X86_BACKEND=m68kjit</text>
+<path d="M270 365 V420" class="edge"/>
+<path d="M740 365 V420" class="edge"/>
+<rect x="50" y="420" width="900" height="65" rx="12" fill="#fef3c7" stroke="#d97706"/>
+<text x="500" y="447" text-anchor="middle">Shared budgets · mapped code RAM · client data, I/O and interrupt callbacks</text>
+<text x="500" y="472" text-anchor="middle" class="small">No OpenPCI or BIOS dependencies inside either CPU backend</text>
+<text x="500" y="520" text-anchor="middle" class="small">One linked backend · one context allocation · no per-instruction backend function table</text>
+</svg>

@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="640" viewBox="0 0 1000 640" role="img" aria-labelledby="title desc">
+  <title id="title">Amiga PCI option ROM library architecture</title>
+  <desc id="desc">Applications call pciinit.library, which uses x86emu.library for CPU execution and openpci.library for PCI access. Emulator memory, I/O and interrupt callbacks return to pciinit.library. Both new libraries are built in one repository.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#334155"/></marker>
+    <style>
+      text { font-family: sans-serif; fill: #172554; }
+      .heading { font-size: 26px; font-weight: 700; }
+      .name { font-size: 22px; font-weight: 700; }
+      .body { font-size: 17px; }
+      .label { font-size: 15px; fill: #334155; }
+      .edge { fill: none; stroke: #334155; stroke-width: 2; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect width="1000" height="640" fill="#ffffff"/>
+  <text x="40" y="42" class="heading">Two libraries, one permanent repository</text>
+  <rect x="320" y="70" width="360" height="65" rx="10" fill="#f1f5f9" stroke="#64748b"/>
+  <text x="500" y="99" text-anchor="middle" class="name">PCIoprom / graphics driver</text>
+  <text x="500" y="122" text-anchor="middle" class="label">OpenPCI supplies struct pci_dev * handles</text>
+  <rect x="35" y="160" width="930" height="305" rx="14" fill="#f8fafc" stroke="#94a3b8" stroke-dasharray="7 5"/>
+  <text x="55" y="187" class="label">Built and released together</text>
+  <rect x="275" y="205" width="450" height="100" rx="10" fill="#dbeafe" stroke="#2563eb"/>
+  <text x="500" y="236" text-anchor="middle" class="name">pciinit.library</text>
+  <text x="500" y="262" text-anchor="middle" class="body">ROM loading · BIOS environment · POST · VBE</text>
+  <text x="500" y="286" text-anchor="middle" class="body">Card ownership · address translation · callbacks</text>
+  <rect x="75" y="365" width="390" height="75" rx="10" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="270" y="395" text-anchor="middle" class="name">x86emu.library</text>
+  <text x="270" y="421" text-anchor="middle" class="body">Selected CPU backend · bounded execution</text>
+  <path d="M500 135 V205" class="edge"/>
+  <path d="M350 305 V334 H175 V365" class="edge"/>
+  <text x="78" y="327" class="label">Run a complete execution slice</text>
+  <path d="M380 365 V348 H540 V305" class="edge"/>
+  <text x="555" y="351" class="label">Memory / I/O / interrupt callbacks</text>
+  <rect x="575" y="495" width="350" height="65" rx="10" fill="#fef3c7" stroke="#d97706"/>
+  <text x="750" y="522" text-anchor="middle" class="name">openpci.library</text>
+  <text x="750" y="546" text-anchor="middle" class="body">public OpenPCI ABI only</text>
+  <path d="M675 305 V320 H925 V480 H750 V495" class="edge"/>
+  <text x="555" y="414" class="label">Configuration, resources, mappings</text>
+  <rect x="575" y="595" width="350" height="35" rx="8" fill="#f1f5f9" stroke="#64748b"/>
+  <text x="750" y="619" text-anchor="middle" class="body">PCI bridge and physical / emulated card</text>
+  <path d="M750 560 V595" class="edge"/>
+  <text x="55" y="512" class="body">Baseline: 68020+, AmigaOS 3.x</text>
+  <text x="55" y="541" class="body">No BIOS or PCI policy in x86emu.library.</text>
+  <text x="55" y="570" class="body">No per-instruction Amiga library-vector calls.</text>
+  <text x="55" y="599" class="body">No dependency from x86emu.library to OpenPCI.</text>
+</svg>

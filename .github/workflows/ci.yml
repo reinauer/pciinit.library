@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build and test (${{ matrix.backend }})
+    runs-on: ubuntu-latest
+    container: stefanreinauer/amiga-gcc:gcc-v16.2
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [m68kjit, libx86emu]
+    env:
+      X86_BACKEND: ${{ matrix.backend }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Mark git directory as safe
+        run: git config --global --add safe.directory '*'
+
+      - name: Fetch OpenPCI SDK
+        uses: ./.github/actions/openpci-sdk
+
+      - name: Show version
+        run: make version
+
+      - name: Build libraries, PCIoprom and tests
+        run: make -j"$(nproc)" all
+
+      # Vamos raises instead of failing Seek() on a pipe, and the test
+      # programs seek their output, so the log goes to a file first.
+      - name: Run host and Vamos tests
+        run: |
+          status=0
+          make check > build/check.log 2>&1 || status=$?
+          cat build/check.log
+          exit "${status}"
+
+      - name: Build release archive
+        if: matrix.backend == 'm68kjit'
+        run: make release
+
+      - name: Upload CI artifacts
+        if: matrix.backend == 'm68kjit'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pciinit-build
+          path: |
+            build/pciinit.library
+            build/x86emu.library
+            build/nojit/x86emu.library
+            build/PCIoprom
+            build/release/*.lha
+            build/release/*.lha.sha256
+          if-no-files-found: error
+
+  # The upstream libx86emu fixtures run on both backends; the block
+  # translator must match the interpreter's output byte for byte.
+  upstream-fixtures:
+    name: Upstream fixtures
+    runs-on: ubuntu-latest
+    container: stefanreinauer/amiga-gcc:gcc-v16.2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # NASM 3.01 (Ubuntu's) turns "jo near" into a short jump under -O99,
+      # which breaks the near-branch fixtures; 3.02 keeps the encoding.
+      - name: Build NASM
+        env:
+          NASM_VERSION: "3.02"
+          NASM_SHA256: 87336eba53b4acfe917424ab5d500d2b0054d9f5148d35c2273ccf2cfb712f0d
+        run: |
+          set -eu
+          dir="${RUNNER_TEMP}/nasm"
+          mkdir -p "${dir}"
+          cd "${dir}"
+          curl -fsSL -o nasm.tar.xz \
+            "https://www.nasm.us/pub/nasm/releasebuilds/${NASM_VERSION}/nasm-${NASM_VERSION}.tar.xz"
+          echo "${NASM_SHA256}  nasm.tar.xz" | sha256sum -c -
+          tar -xJf nasm.tar.xz
+          cd "nasm-${NASM_VERSION}"
+          ./configure -q
+          make -j"$(nproc)" nasm ndisasm
+          echo "${PWD}" >> "${GITHUB_PATH}"
+          ./nasm -v
+
+      - name: Run upstream fixtures and differential workloads
+        run: python3 tools/check_blockjit.py
+
+  format:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned: formatting output changes between clang-format releases.
+      - name: Install clang-format
+        run: pipx install clang-format==23.1.5
+
+      - name: Check formatting
+        run: make check-format

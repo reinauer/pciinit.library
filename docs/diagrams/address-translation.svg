@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="750" viewBox="0 0 1000 750" role="img" aria-labelledby="title desc">
+  <title id="title">x86, PCI and Amiga address translation</title>
+  <desc id="desc">Emulated RAM uses private host storage. Card accesses pass through a width-aware PCI backend that translates PCI bus addresses into Amiga CPU mappings. PCI BIOS and CF8/CFC operations use OpenPCI configuration functions. Temporary windows must be released before emulation resumes. Reserving the VGA aperture prevents BAR overlap but does not create a CPU mapping.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#334155"/></marker>
+    <style>
+      text { font-family: sans-serif; fill: #172554; }
+      .heading { font-size: 26px; font-weight: 700; }
+      .name { font-size: 20px; font-weight: 700; }
+      .body { font-size: 17px; }
+      .label { font-size: 15px; fill: #334155; }
+      .edge { fill: none; stroke: #334155; stroke-width: 2; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect width="1000" height="750" fill="#ffffff"/>
+  <text x="40" y="42" class="heading">Three address spaces, explicit access semantics</text>
+  <rect x="250" y="75" width="500" height="70" rx="10" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="500" y="105" text-anchor="middle" class="name">Emulated x86 CPU</text>
+  <text x="500" y="130" text-anchor="middle" class="body">Linear memory addresses · port numbers · access width</text>
+  <rect x="35" y="220" width="280" height="100" rx="10" fill="#f1f5f9" stroke="#64748b"/>
+  <text x="175" y="252" text-anchor="middle" class="name">Private guest memory</text>
+  <text x="175" y="278" text-anchor="middle" class="body">RAM · IVT · BIOS data · ROM</text>
+  <text x="175" y="303" text-anchor="middle" class="label">Little-endian byte storage</text>
+  <rect x="360" y="220" width="280" height="100" rx="10" fill="#dbeafe" stroke="#2563eb"/>
+  <text x="500" y="252" text-anchor="middle" class="name">Card access</text>
+  <text x="500" y="278" text-anchor="middle" class="body">MMIO · VGA aperture · I/O</text>
+  <text x="500" y="303" text-anchor="middle" class="label">Resolve to a PCI resource</text>
+  <rect x="685" y="220" width="280" height="100" rx="10" fill="#fef3c7" stroke="#d97706"/>
+  <text x="825" y="252" text-anchor="middle" class="name">PCI configuration</text>
+  <text x="825" y="278" text-anchor="middle" class="body">INT 1Ah · CF8/CFC ports</text>
+  <text x="825" y="303" text-anchor="middle" class="label">Public OpenPCI config functions</text>
+  <path d="M350 145 V180 H175 V220" class="edge"/>
+  <path d="M500 145 V220" class="edge"/>
+  <path d="M650 145 V180 H825 V220" class="edge"/>
+  <rect x="360" y="380" width="605" height="80" rx="10" fill="#dbeafe" stroke="#2563eb"/>
+  <text x="662" y="412" text-anchor="middle" class="name">pciinit.library OpenPCI backend</text>
+  <text x="662" y="439" text-anchor="middle" class="body">PCI bus address → Amiga CPU address; width and endian handling</text>
+  <path d="M500 320 V380" class="edge"/>
+  <path d="M825 320 V380" class="edge"/>
+  <rect x="360" y="515" width="605" height="85" rx="10" fill="#fef3c7" stroke="#d97706"/>
+  <text x="662" y="547" text-anchor="middle" class="name">Bridge access</text>
+  <text x="662" y="574" text-anchor="middle" class="body">Permanent mapping, or obtain → bounded access → release</text>
+  <path d="M662 460 V515" class="edge"/>
+  <text x="35" y="395" class="body">Guest RAM is not automatically</text>
+  <text x="35" y="421" class="body">reachable by PCI DMA.</text>
+  <text x="35" y="478" class="body">Hardware words and longs</text>
+  <text x="35" y="504" class="body">must preserve transaction width.</text>
+  <rect x="35" y="640" width="930" height="85" rx="10" fill="#fff7ed" stroke="#ea580c"/>
+  <text x="55" y="670" class="name">Reservation does not establish accessibility</text>
+  <text x="55" y="696" class="body">ReserveMemSpace 0xC0000 prevents BAR overlap with VGA memory.</text>
+  <text x="55" y="717" class="label">Whether the CPU can reach PCI memory 0xA0000–0xBFFFF depends on the bus board.</text>
+</svg>

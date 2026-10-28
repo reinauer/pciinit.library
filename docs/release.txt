@@ -1,0 +1,65 @@
+pciinit.library and x86emu.library for AmigaOS 3.x
+================================================
+
+Requirements
+------------
+68020 or later, AmigaOS 3.0 or later. PCIoprom needs
+mathieeedoubbas.library from AmigaOS. Install a compatible openpci.library
+separately; openpci 40.16.1 is the tested provider.
+
+Hardware execution needs a PCI bus board that forwards legacy VGA memory
+(PCI 0xA0000-0xBFFFF) through ObtainPCIRegion: Prometheus FireStorm,
+Firebird, Mediator and AmigaPCI with current logic. On the original
+Prometheus and the G-REX a video BIOS runs against an empty window and
+PCIoprom prints a warning. The card must not be in use by another driver.
+No Amiga system files, OpenPCI provider or graphics-card ROMs are included
+in this archive.
+
+Installation
+------------
+Copy Libs/pciinit.library and Libs/x86emu.library to LIBS:.
+Libs/x86emu.library_nojit is an interpreter-only alternative: slower, but
+it generates no 68k code and needs about 1 MiB less memory per card. Copy
+it as LIBS:x86emu.library instead if the translating emulator misbehaves.
+Copy C/PCIoprom to C:.
+
+Reserve legacy VGA address space in ENVARC:PCI-Configuration:
+
+ReserveMemSpace 0xC0000
+
+PCIoprom --list-modes
+PCIoprom --mode 0x111
+PCIoprom --mode 0x111 --mode 0x114 --mode 0x111 --pattern
+PCIoprom --trace
+
+The scanner initializes supported cards from their onboard option ROM.
+An optional final filename supplies a matching ROM instead. To keep a card
+out of ROM execution, list it in ENVARC:PCIoprom-Configuration, one
+"Ignore vendor:device" line per card in hexadecimal; "*" as the device
+matches every device of that vendor, and ";" starts a comment. --no-post
+performs only loader/preflight diagnostics, and --dump file saves the
+first card ROM as read from the card. Direct-color modes show a centered
+Boing Ball at about 80% of screen height. --pattern selects the
+readback-verified color bars instead; it needs --mode and supports RGB
+modes. Indexed modes are set without drawing. A ROM-advertised linear
+framebuffer is drawn directly; a banked mode, which is all a VBE 1.2 ROM
+offers, is drawn through the legacy VGA window when the bus board provides
+one, and otherwise PCIoprom says why nothing was drawn. --trace adds the
+last 128 I/O, VGA, BAR and interrupt accesses of each ROM run or failed
+BIOS call to the CPU summary. Read docs/abi.md for the framebuffer lifetime
+contract. POST and mode changes affect the display; exit leaves the last
+mode active.
+
+Contents
+--------
+Libs/          pciinit.library, x86emu.library and x86emu.library_nojit
+C/             PCIoprom
+SDK/include/   Public library headers for Amiga GCC
+SDK/fd/        Library vector descriptions
+ReadMe         Installation and usage notes
+README.md      Project overview and source build instructions
+docs/          ABI reference and architecture notes with diagrams
+LICENSE        BSD 2-Clause license for original project code
+third_party/   Vendored emulator license notices and revision information
+BUILD.txt      Source revision and tracked-change status
+SHA256SUMS     SHA256 hashes of the package files

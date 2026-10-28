@@ -1,0 +1,22 @@
+name: OpenPCI SDK
+description: Fetch the openpci.library headers from Aminet and point OPENPCI_SDK at them
+
+runs:
+  using: composite
+  steps:
+    - name: Download and unpack openpci68k.lha
+      shell: bash
+      run: |
+        set -eu
+        sdk="${RUNNER_TEMP}/openpci"
+        rm -rf "${sdk}"
+        mkdir -p "${sdk}"
+        curl --fail --silent --show-error --location --retry 3 \
+          --connect-timeout 30 --max-time 300 \
+          --output "${sdk}/openpci68k.lha" \
+          https://aminet.net/driver/other/openpci68k.lha
+        sha256sum "${sdk}/openpci68k.lha"
+        (cd "${sdk}" && lha xq openpci68k.lha)
+        test -f "${sdk}/Include/libraries/openpci.h"
+        test -f "${sdk}/Include/proto/openpci.h"
+        echo "OPENPCI_SDK=${sdk}/Include" >> "${GITHUB_ENV}"

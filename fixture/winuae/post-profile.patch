@@ -1,0 +1,54 @@
+--- a/newcpu.cpp
++++ b/newcpu.cpp
+@@ -6211,6 +6211,43 @@
+ 
+ /* "cycle exact" 68020/030  */
+ 
++
++/* Private POST profiler: host bookkeeping does not advance guest cycles. */
++#include <unordered_map>
++struct PostCount { uae_u64 ticks=0, calls=0; };
++static std::unordered_map<uae_u64,PostCount> post_counts;
++static bool post_active;
++static evt_t post_clock;
++static uae_u32 post_pc,post_ip,post_ip_address;
++static void post_profile(void)
++{
++    evt_t now=get_cycles();
++    if(post_active) {
++        auto &v=post_counts[((uae_u64)post_ip<<32)|post_pc];
++        v.ticks+=now-post_clock;v.calls++;
++    }
++    if(regs.irc==0x4e71 && m68k_dreg(regs,0)==0x50494247) {
++        post_counts.clear();post_active=true;
++        post_ip_address=m68k_dreg(regs,1);
++    }
++    if(post_active && regs.irc==0x4e71 && m68k_dreg(regs,0)==0x5049454e) {
++        post_active=false;
++        /* PCIINIT_POST_PROFILE names the report; default: working directory. */
++        const char *path=getenv("PCIINIT_POST_PROFILE");
++        FILE *f=fopen(path?path:"post-pc-profile.tsv","w");
++        if(f) {
++            fprintf(f,"# CYCLE_UNIT=%u\n",CYCLE_UNIT);
++            for(const auto &v:post_counts)
++                fprintf(f,"%08x %08x %llu %llu\n",(unsigned)(v.first>>32),(unsigned)v.first,
++                        (unsigned long long)v.second.ticks,(unsigned long long)v.second.calls);
++            fclose(f);
++        }
++    }
++    if(post_active) {
++        post_clock=now;post_pc=m68k_getpc();
++        post_ip=get_long_debug(post_ip_address);
++    }
++}
+ static void m68k_run_2ce (void)
+ {
+ 	struct regstruct *r = &regs;
+@@ -6260,6 +6297,7 @@
+ #if 0
+ 				static int prevopcode;
+ #endif
++				post_profile();
+ 				r->instruction_pc = m68k_getpc ();
+ 
+ #if 0

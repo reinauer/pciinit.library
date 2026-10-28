@@ -1,0 +1,10 @@
+##base _X86EmuBase
+##bias 30
+##public
+X86Create(config)(a0)
+X86Delete(context)(a0)
+X86GetRegisters(context,registers)(a0,a1)
+X86SetRegisters(context,registers)(a0,a1)
+X86Run(context,limits,result)(a0,a1,a2)
+X86ContextBytes()()
+##end
