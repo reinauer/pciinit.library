@@ -18,6 +18,15 @@ static uint64_t pit_ticks(PCIInitContext *c)
     uint64_t ticks = ((uint64_t)clock.ev_hi << 32) | clock.ev_lo;
     return pi_pit_ticks(ticks, hz);
 }
+/* Channel 0 as the system BIOS leaves it: free running since power-up in
+ * mode 3 with a reload of 65536, until the ROM programs it. */
+static uint32_t pit0_count(PCIInitContext *c)
+{
+    uint32_t reload = c->pit0_reload ? c->pit0_reload : 65536;
+    unsigned mode   = (c->pit0_control >> 1) & 7;
+    unsigned square = !c->pit0_control || mode == 3 || mode == 7;
+    return pi_pit_count(reload, pi_pit_elapsed(pit_ticks(c) - c->pit0_started, reload), square) & 0xffff;
+}
 
 static uint32_t swap(uint32_t v, unsigned width)
 {
@@ -243,14 +252,47 @@ static
         } else if (address == 0x43 && width == 1 && write && *value == 0x80 && c->pit_reload) {
             if (!c->pit_read) {
                 uint32_t elapsed = (c->port61 & 1) ? pi_pit_elapsed(pit_ticks(c) - c->pit_started, c->pit_reload) : 0;
-                uint32_t half    = (c->pit_reload + 1) / 2;
-                if (elapsed >= half)
-                    c->pit_latch = (c->pit_reload & ~1U) - 2 * (elapsed - half);
-                else if (elapsed && (c->pit_reload & 1))
-                    c->pit_latch = c->pit_reload + 1 - 2 * elapsed;
-                else
-                    c->pit_latch = c->pit_reload - 2 * elapsed;
-                c->pit_read = 1;
+                c->pit_latch     = pi_pit_count(c->pit_reload, elapsed, 1);
+                c->pit_read      = 1;
+            }
+            result = 0;
+        } else if (address == 0x43 && width == 1 && write && (*value & 0xc0) == 0) {
+            /* Channel 0, the system tick: a latch command freezes the count
+             * for the next two reads of port 40h, a control word with an
+             * access mode starts a new reload sequence there. */
+            unsigned access = (*value >> 4) & 3;
+            if (access == 0) {
+                if (!c->pit0_read) {
+                    c->pit0_latch = pit0_count(c);
+                    c->pit0_read  = 1;
+                }
+            } else {
+                c->pit0_control = 0x80 | (*value & 0x3f);
+                c->pit0_phase   = access == 2 ? 2 : 1;
+                c->pit0_read    = 0;
+            }
+            result = 0;
+        } else if (address == 0x40 && width == 1 && !write) {
+            if (!c->pit0_read) {
+                c->pit0_latch = pit0_count(c);
+                c->pit0_read  = 1;
+            }
+            *value       = (c->pit0_latch >> (c->pit0_read == 2 ? 8 : 0)) & 255;
+            c->pit0_read = c->pit0_read == 1 ? 2 : 0;
+            result       = 0;
+        } else if (address == 0x40 && width == 1 && write && c->pit0_phase) {
+            unsigned access = (c->pit0_control >> 4) & 3;
+            if (access == 3 && c->pit0_phase == 1) {
+                c->pit0_low   = *value;
+                c->pit0_phase = 2;
+            } else {
+                uint32_t reload = access == 1   ? (*value & 255)
+                                  : access == 2 ? (*value & 255) << 8
+                                                : c->pit0_low | ((*value & 255) << 8);
+                c->pit0_reload  = reload ? reload : 65536;
+                c->pit0_started = pit_ticks(c);
+                if (access == 3)
+                    c->pit0_phase = 1;
             }
             result = 0;
         } else if (address == 0x42 && width == 1 && !write && c->pit_read) {

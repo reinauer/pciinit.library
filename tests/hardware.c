@@ -276,7 +276,32 @@ int main(void)
     CHECK(!pi_hardware_access(&c, 0x42, 1, X86_IN, &v) && v == 0x35);
     CHECK(!pi_hardware_access(&c, 0x42, 1, X86_IN, &v) && v == 0x12);
     CHECK(!pi_hardware_access(&c, 0x61, 1, X86_IN, &v) && (v & 0x20));
+    /* Channel 0: latch and read the free-running system tick, reprogram it
+     * with a low/high reload, and read without a latch. */
+    v = 0x00;
+    CHECK(!pi_hardware_access(&c, 0x43, 1, X86_OUT, &v));
+    CHECK(!pi_hardware_access(&c, 0x40, 1, X86_IN, &v) && v < 256);
+    CHECK(!pi_hardware_access(&c, 0x40, 1, X86_IN, &v) && v < 256);
     v = 0x36;
+    CHECK(!pi_hardware_access(&c, 0x43, 1, X86_OUT, &v));
+    v = 0x34;
+    CHECK(!pi_hardware_access(&c, 0x40, 1, X86_OUT, &v));
+    v = 0x12;
+    CHECK(!pi_hardware_access(&c, 0x40, 1, X86_OUT, &v));
+    v = 0x00;
+    CHECK(!pi_hardware_access(&c, 0x43, 1, X86_OUT, &v));
+    {
+        uint32_t low = 0, high = 0;
+        CHECK(!pi_hardware_access(&c, 0x40, 1, X86_IN, &low));
+        CHECK(!pi_hardware_access(&c, 0x40, 1, X86_IN, &high));
+        CHECK((high << 8 | low) <= 0x1234);
+    }
+    CHECK(!pi_hardware_access(&c, 0x40, 1, X86_IN, &v) && v < 256);
+    CHECK(!pi_hardware_access(&c, 0x40, 1, X86_IN, &v) && v < 256);
+    /* The read-back command and channel 1 stay unanswered. */
+    v = 0xc2;
+    CHECK(pi_hardware_access(&c, 0x43, 1, X86_OUT, &v) != 0);
+    v = 0x76;
     CHECK(pi_hardware_access(&c, 0x43, 1, X86_OUT, &v) != 0);
     legacy_case(&c);
     c.diagnostics = &diag;

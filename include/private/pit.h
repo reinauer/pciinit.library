@@ -29,4 +29,18 @@ static inline uint32_t pi_pit_elapsed(uint64_t ticks, uint32_t reload)
     pi_pit_divmod(ticks, reload, &remainder);
     return remainder;
 }
+/* The count a channel shows `elapsed` ticks into its period of `reload`
+ * ticks. A square wave (mode 3) counts down by two and reloads at each
+ * half period, the rate generator and the other modes count down by one. */
+static inline uint32_t pi_pit_count(uint32_t reload, uint32_t elapsed, unsigned square)
+{
+    uint32_t half = (reload + 1) / 2;
+    if (!square)
+        return reload - elapsed;
+    if (elapsed >= half)
+        return (reload & ~1U) - 2 * (elapsed - half);
+    if (elapsed && (reload & 1))
+        return reload + 1 - 2 * elapsed;
+    return reload - 2 * elapsed;
+}
 #endif

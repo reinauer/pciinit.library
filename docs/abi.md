@@ -168,8 +168,11 @@ guest's width, except the ones a PC chipset answers itself below `100h` and
 `CF8-CFF`. Memory accesses to the legacy window and the card's BARs keep
 the guest's width and byte order. Anything else is refused.
 
-PIT channel 2 runs mode 3 with count latching, timed by the EClock; port
-61h reflects gate and output, and port 80h is ignored. Where the ROM has
+The PIT is timed by the EClock. Channel 0 runs free as a system BIOS
+leaves it, mode 3 with a reload of 65536, and answers latch commands,
+reads and reprogramming through ports 40h and 43h; channel 2 runs mode 3
+with count latching, and port 61h reflects its gate and output. Channel 1
+and the read-back command are refused, and port 80h is ignored. Where the ROM has
 installed no vector, the system BIOS answers as a PC with nothing
 attached: INT 10h, 42h and 6Dh keep the BDA mode, cursor and page and
 discard output; INT 15h returns AH=86h with CF set; INT 16h reports no key

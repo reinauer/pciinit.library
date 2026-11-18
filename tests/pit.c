@@ -9,6 +9,28 @@ static uint32_t random_word(void)
     return seed;
 }
 static unsigned checks, failures;
+/* Mode 3 counts down by two from the reload (even: twice per period, odd:
+ * reload+1 first, reload-1 second), the other modes by one. */
+static void check_count(void)
+{
+    static const struct
+    {
+        uint32_t reload, elapsed;
+        unsigned square;
+        uint32_t count;
+    } cases[] = {
+        {65536, 0, 1, 65536},   {65536, 1, 1, 65534},   {65536, 32767, 1, 2},       {65536, 32768, 1, 65536},
+        {65536, 65535, 1, 2},   {0x1234, 0, 1, 0x1234}, {0x1234, 0x91a, 1, 0x1234}, {0x1234, 0x919, 1, 2},
+        {1361, 0, 1, 1361},     {1361, 1, 1, 1360},     {1361, 680, 1, 2},          {1361, 681, 1, 1360},
+        {1361, 1360, 1, 2},     {65536, 0, 0, 65536},   {65536, 1, 0, 65535},       {65536, 65535, 0, 1},
+        {0x1234, 0x1233, 0, 1},
+    };
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        ++checks;
+        if (pi_pit_count(cases[i].reload, cases[i].elapsed, cases[i].square) != cases[i].count)
+            ++failures;
+    }
+}
 static void check(uint64_t ticks, uint32_t hz, uint32_t reload)
 {
     uint32_t remainder;
@@ -30,6 +52,7 @@ int main(int argc, char **argv)
     unsigned repeats        = argc > 1 ? atoi(argv[1]) : 1;
     if (!repeats || repeats > 100)
         return 20;
+    check_count();
     for (unsigned n = 0; n < repeats; ++n) {
         for (unsigned i = 0; i < sizeof(rates) / sizeof(rates[0]); ++i) {
             for (unsigned j = 0; j < sizeof(clocks) / sizeof(clocks[0]); ++j)

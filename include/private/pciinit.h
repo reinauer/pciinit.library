@@ -40,11 +40,15 @@ struct PCIInitContext
     struct PIBar bars[6];
     struct MsgPort *timer_port;
     struct timerequest *timer;
-    uint64_t pit_started;
+    uint64_t pit_started; /* PIT channel 2 */
     uint32_t pit_reload;
     uint16_t pit_latch;
     uint8_t pit_phase, pit_low, pit_read;
     uint8_t port61;
+    uint64_t pit0_started; /* PIT channel 0; zero fields mean the system BIOS default */
+    uint32_t pit0_reload;
+    uint16_t pit0_latch;
+    uint8_t pit0_phase, pit0_low, pit0_read, pit0_control;
     struct PCIInitDiagnostics *diagnostics;
     uint32_t vbe_version, vbe_memory, mode_flags, mode_valid, map_command;
     struct PCIInitVBEModeInfo mode;
