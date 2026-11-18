@@ -8,9 +8,10 @@ CPPFLAGS = -Iinclude -I$(OPENPCI_SDK)
 CFLAGS = -m68020 -O3 -g -MMD -MP -Wall -Wextra -Werror -fno-strict-aliasing -mregparm=2
 
 # The pciinit.library version and the release name come from the nearest
-# v<version>.<revision> tag, e.g. v2.4 or v2.4-rc1. Checkouts without such a
-# tag build as PCIINIT_FALLBACK_VERSION. Off the tag, the git description is
-# appended to the ID string.
+# v<version>.<revision> tag, e.g. v2.4, v2.4.1 or v2.4-rc1. AmigaOS only has
+# version and revision, so a package number or suffix is appended to the ID
+# string instead. Checkouts without such a tag build as
+# PCIINIT_FALLBACK_VERSION. Off the tag, the git description is appended.
 PCIINIT_FALLBACK_VERSION = 2.3
 GIT_TAG := $(shell git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null)
 GIT_DESCRIBE := $(shell git describe --tags --match 'v[0-9]*' --dirty --always 2>/dev/null)
@@ -18,10 +19,11 @@ RELEASE_VERSION ?= $(or $(patsubst v%,%,$(GIT_TAG)),$(PCIINIT_FALLBACK_VERSION))
 PCIINIT_VERSION := $(shell printf '%s\n' '$(RELEASE_VERSION)' | sed -n 's/^\([0-9][0-9]*\)\.[0-9][0-9]*.*/\1/p')
 PCIINIT_REVISION := $(shell printf '%s\n' '$(RELEASE_VERSION)' | sed -n 's/^[0-9][0-9]*\.\([0-9][0-9]*\).*/\1/p')
 ifneq ($(words $(PCIINIT_VERSION) $(PCIINIT_REVISION)),2)
-$(error RELEASE_VERSION '$(RELEASE_VERSION)' is not <version>.<revision>[-suffix])
+$(error RELEASE_VERSION '$(RELEASE_VERSION)' is not <version>.<revision>[.<package>][-suffix])
 endif
 PCIINIT_DATE := $(or $(shell git log -1 --format=%cd --date=format:%d.%m.%Y 2>/dev/null),$(shell date +%d.%m.%Y))
-PCIINIT_BUILD := $(if $(filter v$(RELEASE_VERSION),$(GIT_DESCRIBE)),,$(GIT_DESCRIBE))
+PCIINIT_BUILD := $(strip $(if $(filter v$(RELEASE_VERSION),$(GIT_DESCRIBE)),\
+    $(if $(filter $(PCIINIT_VERSION).$(PCIINIT_REVISION),$(RELEASE_VERSION)),,$(RELEASE_VERSION)),$(GIT_DESCRIBE)))
 PCIINIT_VERSION_DEFS = -DPCIINIT_VERSION=$(PCIINIT_VERSION) -DPCIINIT_REVISION=$(PCIINIT_REVISION) \
     -DPCIINIT_DATE='"$(PCIINIT_DATE)"' $(if $(PCIINIT_BUILD),-DPCIINIT_BUILD='" $(PCIINIT_BUILD)"')
 X86_BACKEND ?= m68kjit

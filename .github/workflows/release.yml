@@ -38,8 +38,8 @@ jobs:
         run: |
           set -eu
           if ! printf '%s\n' "${RELEASE_TAG}" |
-              grep -Eq '^v[0-9]+\.[0-9]+(-[A-Za-z0-9]+)?$'; then
-            echo "Release tag must look like v2.4 or v2.4-rc1: ${RELEASE_TAG}" >&2
+              grep -Eq '^v[0-9]+\.[0-9]+(\.[0-9]+)?(-[A-Za-z0-9]+)?$'; then
+            echo "Release tag must look like v2.4, v2.4.1 or v2.4-rc1: ${RELEASE_TAG}" >&2
             exit 1
           fi
           version="${RELEASE_TAG#v}"
@@ -87,13 +87,20 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -eu
-          number="$(printf '%s\n' "${VERSION}" | sed 's/-.*//')"
+          # AmigaOS has version and revision only; a package number or
+          # suffix follows the date in the ID string.
+          number="$(printf '%s\n' "${VERSION}" | sed -E 's/^([0-9]+\.[0-9]+).*/\1/')"
+          if [ "${number}" = "${VERSION}" ]; then
+            expected="pciinit.library ${number} (*)"
+          else
+            expected="pciinit.library ${number} (*) ${VERSION}"
+          fi
           ident="$(grep -ao 'pciinit\.library [0-9][ -~]*' build/pciinit.library)"
           echo "${ident}"
           case "${ident}" in
-            "pciinit.library ${number} ("*")") ;;
+            ${expected}) ;;
             *)
-              echo "pciinit.library ID string does not match ${VERSION}" >&2
+              echo "pciinit.library ID string does not match ${VERSION}: expected ${expected}" >&2
               exit 1
               ;;
           esac
@@ -144,10 +151,12 @@ jobs:
   aminet:
     name: Upload to Aminet
     needs: build
-    # Pre-release tags (v2.4-rc1) stay off Aminet; manual runs opt in.
+    # Aminet cannot be undrafted: a tag push only creates the draft GitHub
+    # release, and a manual run with the Aminet option uploads a checked
+    # release. Pre-release tags (v2.4-rc1) stay off Aminet.
     if: >-
       needs.build.outputs.prerelease == 'false' &&
-      (github.event_name == 'push' || github.event.inputs.aminet == 'true')
+      github.event_name == 'workflow_dispatch' && github.event.inputs.aminet == 'true'
     runs-on: ubuntu-latest
     concurrency:
       group: aminet-release

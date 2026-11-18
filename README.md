@@ -60,10 +60,13 @@ build. `make release` packs them with the SDK headers and
 documentation into `build/release/pciinit-<version>.lha`; see
 [docs/release.txt](docs/release.txt) for the archive contents and
 installation. The `pciinit.library` version and the archive name come from
-the nearest `v<version>.<revision>` git tag, such as `v2.4` or `v2.4-rc1`;
-`make version` prints them and `RELEASE_VERSION=` overrides them. Pushing
-such a tag builds and tests the archive, attaches it to a draft GitHub
-release and, for tags without a suffix, uploads it to Aminet.
+the nearest `v<version>.<revision>` git tag, such as `v2.4`, `v2.4.1` or
+`v2.4-rc1`; `make version` prints them and `RELEASE_VERSION=` overrides
+them. AmigaOS versions have no third number, so a package number or suffix
+follows the date in the library ID string. Pushing such a tag builds and
+tests the archive and attaches it to a draft GitHub release; running the
+release workflow by hand with the Aminet option uploads a checked release
+to Aminet.
 
 The sources follow the `.clang-format` style in the repository root:
 `make format` applies it and `make check-format` verifies it
