@@ -49,6 +49,7 @@ struct PCIInitContext
     uint32_t pit0_reload;
     uint16_t pit0_latch;
     uint8_t pit0_phase, pit0_low, pit0_read, pit0_control;
+    uint8_t dma_page[16]; /* DMA page registers 80h-8Fh: read/write latches, 80h is the POST code */
     struct PCIInitDiagnostics *diagnostics;
     uint32_t vbe_version, vbe_memory, mode_flags, mode_valid, map_command;
     struct PCIInitVBEModeInfo mode;

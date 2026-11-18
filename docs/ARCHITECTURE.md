@@ -238,7 +238,7 @@ points. Memory-size reports match the allocated layout.
 | INT 10h | Bootstrap services until the ROM installs its own video handler |
 | INT 11h / 12h | Equipment and conventional-memory reports |
 | INT 15h / 16h | Failure status and an empty keyboard, as on a bare PC |
-| Platform ports | PIT channel 2 and port 61h for delay loops; port 80h is ignored |
+| Platform ports | PIT channels 0 and 2 and port 61h for delay loops; DMA page registers 80h-8Fh are latches |
 
 Interrupt dispatch separates library services from handlers the firmware
 installs, with normal chaining and return. VBE runs through the graphics

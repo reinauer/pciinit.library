@@ -172,8 +172,9 @@ The PIT is timed by the EClock. Channel 0 runs free as a system BIOS
 leaves it, mode 3 with a reload of 65536, and answers latch commands,
 reads and reprogramming through ports 40h and 43h; channel 2 runs mode 3
 with count latching, and port 61h reflects its gate and output. Channel 1
-and the read-back command are refused, and port 80h is ignored. Where the ROM has
-installed no vector, the system BIOS answers as a PC with nothing
+and the read-back command are refused. The DMA page registers `80h-8Fh`
+are read/write latches, so POST codes and delay writes there are absorbed.
+Where the ROM has installed no vector, the system BIOS answers as a PC with nothing
 attached: INT 10h, 42h and 6Dh keep the BDA mode, cursor and page and
 discard output; INT 15h returns AH=86h with CF set; INT 16h reports no key
 and returns a space to a blocking read; INT 1Ah returns the 18.2 Hz tick

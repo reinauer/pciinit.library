@@ -240,9 +240,17 @@ static
             result = 0;
         } else if (address >= 0xcfc && address + width <= 0xd00 && (c->cf8 & 0x80000000U)) {
             result = config(c, (c->cf8 >> 8) & 0xffff, (c->cf8 & 0xfc) + (address - 0xcfc), width, write, value);
-        } else if (address == 0x80) {
-            if (!write)
-                *value = 255;
+        } else if (address >= 0x80 && address + width <= 0x90) {
+            /* The DMA page register file is 16 byte latches; ROMs use 80h
+             * and 84h for POST codes and as a bus-settling delay. */
+            unsigned i;
+            for (i = 0; i < width; ++i) {
+                uint8_t *latch = &c->dma_page[address - 0x80 + i];
+                if (write)
+                    *latch = *value >> (8 * i);
+                else
+                    *value = (i ? *value : 0) | (uint32_t)*latch << (8 * i);
+            }
             result = 0;
         } else if (address == 0x43 && width == 1 && write && *value == 0xb6) {
             /* Channel 2, low/high reload, binary square-wave mode. */

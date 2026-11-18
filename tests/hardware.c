@@ -276,6 +276,21 @@ int main(void)
     CHECK(!pi_hardware_access(&c, 0x42, 1, X86_IN, &v) && v == 0x35);
     CHECK(!pi_hardware_access(&c, 0x42, 1, X86_IN, &v) && v == 0x12);
     CHECK(!pi_hardware_access(&c, 0x61, 1, X86_IN, &v) && (v & 0x20));
+    /* DMA page registers: word and byte POST codes on 84h land in latches
+     * that read back at any width; the block ends at 8Fh. */
+    v = 0;
+    CHECK(!pi_hardware_access(&c, 0x84, 2, X86_OUT, &v));
+    v = 0x5a;
+    CHECK(!pi_hardware_access(&c, 0x84, 1, X86_OUT, &v));
+    v = 0xa5;
+    CHECK(!pi_hardware_access(&c, 0x85, 1, X86_OUT, &v));
+    CHECK(!pi_hardware_access(&c, 0x84, 2, X86_IN, &v) && v == 0xa55a);
+    CHECK(!pi_hardware_access(&c, 0x80, 1, X86_IN, &v) && v == 0);
+    v = 0x11223344;
+    CHECK(!pi_hardware_access(&c, 0x8c, 4, X86_OUT, &v));
+    CHECK(!pi_hardware_access(&c, 0x8e, 2, X86_IN, &v) && v == 0x1122);
+    v = 0;
+    CHECK(pi_hardware_access(&c, 0x8e, 4, X86_OUT, &v));
     /* Channel 0: latch and read the free-running system tick, reprogram it
      * with a low/high reload, and read without a latch. */
     v = 0x00;
