@@ -21,15 +21,25 @@ def main():
                         help='emulated bus board; only FireStorm reaches legacy VGA memory')
     parser.add_argument('--openpci', type=Path, default=ROOT / 'fixture/out/pinned-openpci.library',
                         help='openpci.library binary to install in the guest')
-    parser.add_argument('--suite', choices=('foundation', 'backend', 'post', 'display', 'vbe', 'vbe-cli', 'boing-cli', 'post-timing', 'record', 'profile', 'deadline'), default='foundation')
+    parser.add_argument('--suite', choices=('foundation', 'backend', 'post', 'display', 'vbe', 'vbe-cli', 'boing-cli', 'post-timing', 'record', 'profile', 'deadline', 'bustrap'), default='foundation')
     parser.add_argument('--post-source', choices=('card', 'file'), default='card')
     parser.add_argument('--port', type=int, default=2345)
     parser.add_argument('--jit-kb', type=int, choices=(0, 16384), default=0,
                         help='optional WinUAE 68k JIT cache for long POST runs')
     parser.add_argument('--cpu-mhz', type=int, help='cycle-exact 68030 clock; disables host JIT')
+    parser.add_argument('--master-abort', action='store_true',
+                        help='bridge ends unclaimed PCI cycles with a 68k bus error (WinUAE bridge option '
+                             '"masterabort"); the backend suite then expects counted bus errors')
+    parser.add_argument('--cpu', type=int, choices=(68020, 68030, 68040, 68060), default=68020,
+                        help='CPU model; --cpu-mhz always runs a 68030')
     args = parser.parse_args()
     if args.cpu_mhz is not None and (not 1 <= args.cpu_mhz <= 100 or args.jit_kb):
         parser.error('--cpu-mhz requires 1..100 MHz and --jit-kb 0')
+    if args.master_abort and args.cpu == 68020:
+        parser.error('--master-abort needs --cpu 68030, 68040 or 68060: WinUAE builds faithful bus error '
+                     'frames only with MMU emulation, which the 68020 lacks')
+    if args.cpu_mhz is not None and args.cpu != 68020:
+        parser.error('--cpu-mhz selects its own 68030; leave --cpu at the default')
     if args.suite == 'post-timing' and args.cpu_mhz is None:
         parser.error('--suite post-timing requires --cpu-mhz')
     dest = ROOT / 'fixture/out/guest-test'
@@ -89,12 +99,14 @@ def main():
         inputs.append(artifact)
         commands.append('PCIoprom --no-post >SYS:pcioprom.txt')
         commands.append('PCIoprom --no-post SYS:card.rom >SYS:pcioprom-file.txt')
-    if args.suite in ('backend', 'display', 'vbe', 'deadline'):
-        name = {'backend': 'hardware-test', 'display': 'post-test', 'vbe': 'vbe-native-test', 'deadline': 'deadline-native-test'}[args.suite]
+    if args.suite in ('backend', 'display', 'vbe', 'deadline', 'bustrap'):
+        name = {'backend': 'hardware-test', 'display': 'post-test', 'vbe': 'vbe-native-test', 'deadline': 'deadline-native-test',
+                'bustrap': 'bustrap-test'}[args.suite]
         artifact = ROOT / 'build' / name
         shutil.copy2(current(artifact), guest / name)
         inputs.append(artifact)
-        commands = commands[:4] + [f'{name} >SYS:{name}.txt']
+        argument = ' masterabort' if args.master_abort and name == 'hardware-test' else ''
+        commands = commands[:4] + [f'{name}{argument} >SYS:{name}.txt']
     elif args.suite in ('vbe-cli', 'boing-cli'):
         extra = ' --pattern' if args.suite == 'vbe-cli' else ''
         commands = commands[:4] + [f'PCIoprom --list-modes --mode 0x111 --mode 0x114 --mode 0x112 --mode 0x110 --mode 0x111{extra} >SYS:{args.suite}.txt']
@@ -155,9 +167,22 @@ unix.rom_path={romdir}/
 debugging_features=gdbserver
 gdb_port={args.port}
 {'prometheusfirestorm' if args.bridge == 'firestorm' else 'prometheus'}_rom_file=:NOROM
+{('prometheusfirestorm' if args.bridge == 'firestorm' else 'prometheus') + '_rom_options=masterabort' if args.master_abort else ''}
 gfxcard_type=S3VIRGE_PCI
 gfxcard_size=4
 '''
+    if args.cpu != 68020:
+        config = config.replace('cpu_model=68020', f'cpu_model={args.cpu}')
+        if args.cpu in (68040, 68060):
+            # Their exception frames differ from the 68020/030 ones.
+            config += f'fpu_model={args.cpu}\n'
+    if args.master_abort:
+        # The non-MMU CPU cores build incomplete bus error frames (no DF on
+        # the 68020/030, a short format 7 on the 68040/060) and cannot
+        # continue a faulted instruction; the MMU cores do both. Exec never
+        # enables the MMU, so this changes nothing else.
+        config = config.replace('cpu_compatible=false', 'cpu_compatible=true')
+        config += f'mmu_model={args.cpu}\n'
     if args.cpu_mhz is not None:
         config = config.replace('cpu_model=68020', 'cpu_model=68030')
         config = config.replace('cpu_compatible=false', 'cpu_compatible=true')

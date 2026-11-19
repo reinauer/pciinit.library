@@ -20,7 +20,11 @@ against an empty window and the context reports `PI_WARN_NO_LEGACY_WINDOW`.
 `--seed` names a guest directory holding `C/Assign`, `C/Execute`, `C/Wait`
 and `Libs/mathieeedoubbas.library` (default `fixture/out/seed`); `--openpci`
 names the provider (default `fixture/out/pinned-openpci.library`);
-`--kickstart` and `--port` override the remaining inputs. The supplied ROM
+`--kickstart` and `--port` override the remaining inputs. `--cpu` selects a
+68020 (the default), 68030, 68040 or 68060. `--master-abort` sets the
+bridge's `masterabort` option, so a PCI cycle no card claims ends in a 68k
+bus error instead of all-ones, and tells the backend suite to expect them;
+it needs a WinUAE with that option. The supplied ROM
 is copied as the emulator's card ROM and as `SYS:card.rom` for the tests
 that compare both sources.
 
@@ -35,6 +39,7 @@ allocated into the legacy VGA area, and has no RTG driver. Suites:
 | `vbe` | `vbe-native-test`: mode queries, mode sets, framebuffer mapping rules |
 | `post`, `vbe-cli`, `boing-cli` | `PCIoprom` POST, mode sequence, pattern or Boing Ball |
 | `post-timing`, `record`, `profile`, `deadline` | measurement and recording runs |
+| `bustrap` | `bustrap-test`: the bus-error trap handler with hand-built exception frames; needs no `--rom` |
 
 `run_guest.py` launches the emulator headless with a time limit and archives
 the previous reports; `done.txt` only proves script completion. A leftover
