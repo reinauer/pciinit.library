@@ -36,6 +36,7 @@ def collect(dest, suite):
         'record': {},
         'profile': {},
         'deadline': {'deadline-native-test.txt':'DEADLINE RESULT'},
+        'bustrap': {'bustrap-test.txt': 'BUSTRAP RESULT'},
     }[suite]
     scanners = ('post-record.txt',) if suite in ('record', 'profile') else ('post-timing.txt',) if suite == 'post-timing' else (suite+'.txt',) if suite in ('vbe-cli','boing-cli') else ('post.txt',) if suite == 'post' else ('pcioprom.txt', 'pcioprom-file.txt') if suite == 'foundation' else ()
     launch = json.loads((dest / 'launch.json').read_text())
@@ -61,9 +62,10 @@ def collect(dest, suite):
         elif source.name in ('PCIoprom', 'engine-test', 'rom-test',
                               'library-test', 'pciinit-test', 'allocation-test',
                               'hardware-test', 'post-test',
-                              'vbe-native-test', 'vbe-api-test', 'vbe-parse-test', 'post-timing', 'post-record'):
+                              'vbe-native-test', 'vbe-api-test', 'vbe-parse-test', 'post-timing', 'post-record',
+                              'bustrap-test'):
             actual = dest / 'guest' / source.name
-        elif sha(dest / 'roms/s3virge.rom') == digest:
+        elif (dest / 'roms/s3virge.rom').exists() and sha(dest / 'roms/s3virge.rom') == digest:
             actual = dest / 'roms/s3virge.rom'
         else:
             actual = source  # Kickstart and configuration are read in place.
@@ -149,7 +151,8 @@ def collect(dest, suite):
                 raise ValueError('missing CLI enumeration or framebuffer drawing result')
         reports[name] = sha(path)
         combined.append(f'=== {name} ===\n{text.rstrip()}\n')
-    rom_hash = sha(dest / 'roms/s3virge.rom')
+    rom = dest / 'roms/s3virge.rom'
+    rom_hash = sha(rom) if rom.exists() else None  # suites that take no --rom
     if suite == 'post' and 'SYS:source.rom' in (dest / 'guest/S/startup-sequence').read_text():
         if sha(dest / 'guest/source.rom') != rom_hash:
             raise ValueError('executed file ROM differs from supplied ROM')
@@ -176,7 +179,7 @@ def collect(dest, suite):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--suite', choices=('foundation', 'backend', 'post', 'display', 'vbe', 'vbe-cli', 'boing-cli', 'post-timing', 'record', 'profile', 'deadline'), default='foundation')
+    parser.add_argument('--suite', choices=('foundation', 'backend', 'post', 'display', 'vbe', 'vbe-cli', 'boing-cli', 'post-timing', 'record', 'profile', 'deadline', 'bustrap'), default='foundation')
     parser.add_argument('--output', type=Path, default=ROOT / 'fixture/out/guest-test/foundation',
                         help='output path prefix for JSON and text reports')
     args = parser.parse_args()
