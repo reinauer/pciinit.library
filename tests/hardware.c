@@ -21,6 +21,47 @@ static uint8_t rd(volatile uint8_t *io, unsigned port, uint8_t index)
     io[port] = index;
     return io[port + 1];
 }
+/* A master abort: with memory decode off the card ignores its own BAR.
+ * PC bridges answer all-ones and drop the write. A bridge that ends the
+ * Amiga cycle with a bus error instead (WinUAE's masterabort bridge option)
+ * meets exec first: on the 68020/030 exec completes a data fault itself and
+ * the read returns zero; on the 68040/060 it reaches the library's trap
+ * handler, which must give the PC values, count the faults and stop the
+ * run in strict mode. */
+static void master_abort_case(PCIInitContext *c, struct Library *pci, struct pci_dev *board, uint32_t command,
+                              uint32_t bus_error)
+{
+    uint32_t caught   = bus_error && (SysBase->AttnFlags & AFF_68040);
+    uint32_t expected = bus_error && !caught ? 0 : 0xffffffffU;
+    uint32_t v, read, owned = (command | 3) & ~PCI_COMMAND_MASTER;
+    c->hardware = 1;
+    CHECK(pi_hardware_start(c) == PI_OK);
+    if (failures)
+        return;
+    CHECK(c->bars_visible);
+    op_write(pci, board, PCI_COMMAND, owned & ~PCI_COMMAND_MEMORY, 2);
+    read = 1;
+    CHECK(pi_hardware_access(c, c->bars[0].bus, 4, X86_READ, &read) == 0 && read == expected);
+    v = 0x12345678;
+    CHECK(pi_hardware_access(c, c->bars[0].bus + 4, 4, X86_WRITE, &v) == 0);
+    CHECK(c->trap.faults == (caught ? 2 : 0));
+    printf("HARDWARE master abort read=%08lx faults=%lu address=%08lx bar=%08lx\n", (ULONG)read, (ULONG)c->trap.faults,
+           (ULONG)c->trap.address, (ULONG)c->bars[0].cpu);
+    c->faults_seen    = c->trap.faults;
+    c->stop_bus_error = 1;
+    v                 = 1;
+    CHECK(pi_hardware_access(c, c->bars[0].bus, 2, X86_READ, &v) == caught && (v & 0xffff) == (expected & 0xffff));
+    c->stop_bus_error = 0;
+    op_write(pci, board, PCI_COMMAND, owned, 2);
+    CHECK(pi_hardware_access(c, c->bars[0].bus, 4, X86_READ, &v) == 0);
+    c->info.warnings   = 0;
+    c->info.bus_errors = 0;
+    pi_hardware_finish(c);
+    CHECK(c->info.bus_errors == (caught ? 3 : 0));
+    CHECK(!(c->info.warnings & PI_WARN_BUS_ERROR) == !caught);
+    CHECK(!caught || c->info.bus_error_address == c->bars[0].cpu);
+    CHECK(op_read(pci, board, PCI_COMMAND, 2) == command);
+}
 /* Legacy VGA memory through the bridge window: sequencer map mask and
  * read map select give a planar round trip any VGA chip performs. */
 static void legacy_case(PCIInitContext *c)
@@ -140,7 +181,7 @@ static void legacy_case(PCIInitContext *c)
 #ifdef __mc68000__
 __attribute__((stkparm))
 #endif
-int main(void)
+int main(int argc, char **argv)
 {
     struct PIBase base    = {0};
     PCIInitContext c      = {0};
@@ -173,6 +214,8 @@ int main(void)
     bar           = op_read(pci, board, 0x10, 4);
     command       = op_read(pci, board, 4, 2);
     CHECK(pi_hardware_start(&c) == PI_UNSUPPORTED_MAPPING);
+    /* "masterabort": the bridge raises a bus error for unclaimed cycles. */
+    master_abort_case(&c, pci, board, command, argc > 1 && !strcmp(argv[1], "masterabort"));
     c.hardware = 1;
     CHECK(pi_hardware_start(&c) == PI_OK);
     if (failures)

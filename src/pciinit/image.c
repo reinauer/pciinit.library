@@ -43,6 +43,18 @@ uint32_t pi_options(const struct TagItem *tags, struct PIOptions *opts)
         case PII_Quirks:
             opts->quirks = data;
             break;
+        case PII_AccessHook:
+            opts->hook = (struct Hook *)data;
+            break;
+        case PII_AccessRanges:
+            opts->ranges = (const struct PCIInitAccessRange *)data;
+            break;
+        case PII_ServiceLog:
+            opts->services = (struct PCIInitServiceLog *)data;
+            break;
+        case PII_StopOnBusError:
+            opts->stop_bus_error = data;
+            break;
         default:
             return PI_BAD_ARGUMENT;
         }

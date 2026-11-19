@@ -3,6 +3,7 @@
 #include "private/pit.h"
 #include <devices/timer.h>
 #include <proto/timer.h>
+#include <stddef.h>
 
 /* Card-independent transport for a ROM running on its own card: legacy
  * VGA memory through the bridge's ObtainPCIRegion window, I/O ports
@@ -36,27 +37,184 @@ static uint32_t swap(uint32_t v, unsigned width)
         return (v << 24) | ((v & 0xff00) << 8) | ((v >> 8) & 0xff00) | (v >> 24);
     return v;
 }
-/* PCI memory keeps byte addresses; a little-endian guest value is stored
- * with its low byte first, which is a swapped 68k word or longword. */
-static uint32_t transaction(uint32_t address, unsigned width, unsigned write, uint32_t value)
+/* Exec completes a data fault on the 68020/030 itself before any task
+ * handler runs (see bus.S), so the trap-safe routines would add a call and
+ * two NOPs to every access there for nothing. They are used on the
+ * 68040/060 only; elsewhere card accesses stay plain loads and stores. */
+static void store(const PCIInitContext *c, uint32_t address, unsigned width, uint32_t value)
 {
-    if (write) {
-        value = swap(value, width);
+    volatile void *p = (volatile void *)address;
+    if (!c->bus_routines) {
         if (width == 1)
-            *(volatile uint8_t *)address = value;
+            *(volatile uint8_t *)p = value;
         else if (width == 2)
-            *(volatile uint16_t *)address = value;
+            *(volatile uint16_t *)p = value;
         else
-            *(volatile uint32_t *)address = value;
-        return 0;
+            *(volatile uint32_t *)p = value;
+    } else if (width == 1)
+        pi_bus_write8(p, value);
+    else if (width == 2)
+        pi_bus_write16(p, value);
+    else
+        pi_bus_write32(p, value);
+}
+static uint32_t load(const PCIInitContext *c, uint32_t address, unsigned width)
+{
+    volatile void *p = (volatile void *)address;
+    if (!c->bus_routines) {
+        if (width == 1)
+            return *(volatile uint8_t *)p;
+        if (width == 2)
+            return *(volatile uint16_t *)p;
+        return *(volatile uint32_t *)p;
     }
     if (width == 1)
-        value = *(volatile uint8_t *)address;
-    else if (width == 2)
-        value = *(volatile uint16_t *)address;
+        return pi_bus_read8(p) & 255;
+    if (width == 2)
+        return pi_bus_read16(p) & 65535;
+    return pi_bus_read32(p);
+}
+/* PCI memory keeps byte addresses; a little-endian guest value is stored
+ * with its low byte first, which is a swapped 68k word or longword. A bus
+ * error caught by the trap handler ends the cycle as an aborted PCI cycle
+ * would (see bus.S). */
+static uint32_t transaction(const PCIInitContext *c, uint32_t address, unsigned width, unsigned write, uint32_t value)
+{
+    if (write) {
+        store(c, address, width, swap(value, width));
+        return 0;
+    }
+    return swap(load(c, address, width), width);
+}
+/* bus.S reaches these by fixed offsets. */
+_Static_assert(offsetof(struct ExecBase, ThisTask) == 276, "ExecBase.ThisTask");
+_Static_assert(offsetof(struct Task, tc_TrapData) == 46 && offsetof(struct Task, tc_TrapCode) == 50, "Task traps");
+_Static_assert(offsetof(struct PIBusTrap, faults) == 8 && offsetof(struct PIBusTrap, address) == 12, "PIBusTrap");
+/* The task's trap handler catches bus errors on card accesses while the
+ * card is owned. Traps are synchronous, so the two fields need no lock;
+ * data is set before code and restored after it. */
+static void trap_install(PCIInitContext *c)
+{
+    struct ExecBase *SysBase = c->owner->sys;
+    struct Task *task        = FindTask(NULL);
+    c->trap                  = (struct PIBusTrap){task->tc_TrapCode, task->tc_TrapData, 0, 0};
+    c->faults_seen           = 0;
+    c->bus_routines          = !!(SysBase->AttnFlags & AFF_68040);
+    task->tc_TrapData        = &c->trap;
+    task->tc_TrapCode        = (APTR)pi_bus_trap;
+}
+static void trap_remove(PCIInitContext *c)
+{
+    struct ExecBase *SysBase = c->owner->sys;
+    struct Task *task        = FindTask(NULL);
+    task->tc_TrapCode        = c->trap.code;
+    task->tc_TrapData        = c->trap.data;
+    if (c->trap.faults) {
+        if (!c->info.bus_errors)
+            c->info.bus_error_address = c->trap.address;
+        c->info.bus_errors += c->trap.faults;
+        c->info.warnings |= PI_WARN_BUS_ERROR;
+    }
+    c->trap.code = NULL;
+}
+/* Whether the access hook wants an access of width bytes at offset. */
+static int hooked(const PCIInitContext *c, uint32_t space, uint32_t bar, uint32_t offset, uint32_t width)
+{
+    unsigned i;
+    if (!c->hook)
+        return 0;
+    if (!c->range_count)
+        return 1;
+    for (i = 0; i < c->range_count; ++i) {
+        const struct PCIInitAccessRange *r = &c->ranges[i];
+        if (r->space == space && (space != PI_SPACE_BAR || r->bar == bar) && offset <= r->last &&
+            offset + width - 1 >= r->first)
+            return 1;
+    }
+    return 0;
+}
+static uint32_t call_hook(PCIInitContext *c, struct PCIInitAccessMsg *m)
+{
+    typedef ULONG (*fn)(OREG(struct Hook *, h, a0), OREG(APTR, o, a2), OREG(struct PCIInitAccessMsg *, m, a1));
+    return ((fn)(APTR)c->hook->h_Entry)(c->hook, c, m);
+}
+/* The BEFORE call of an access hook. PI_HOOK_PASS means: perform the
+ * access with *value and call after_hook() with the same message. */
+static uint32_t before_hook(PCIInitContext *c, struct PCIInitAccessMsg *m, uint32_t space, uint32_t bar,
+                            uint32_t offset, uint32_t width, unsigned write, uint32_t *value)
+{
+    uint32_t verdict;
+    m->size = 0;
+    if (!hooked(c, space, bar, offset, width))
+        return PI_HOOK_PASS;
+    *m = (struct PCIInitAccessMsg){sizeof(*m), space, PI_PHASE_BEFORE, write, bar, offset, width, write ? *value : 0};
+    verdict = call_hook(c, m);
+    if (verdict == PI_HOOK_DONE || (write && m->value != *value))
+        c->hook_changed = 1;
+    if (verdict == PI_HOOK_DONE || write)
+        *value = m->value;
+    return verdict > PI_HOOK_FAULT ? PI_HOOK_FAULT : verdict;
+}
+/* The AFTER call for a passed read; returns the access status. */
+static uint32_t after_hook(PCIInitContext *c, struct PCIInitAccessMsg *m, unsigned write, uint32_t *value)
+{
+    uint32_t verdict;
+    if (!m->size || write)
+        return 0;
+    m->phase = PI_PHASE_AFTER;
+    m->value = *value;
+    verdict  = call_hook(c, m);
+    if (m->value != *value)
+        c->hook_changed = 1;
+    *value = m->value;
+    return verdict == PI_HOOK_FAULT;
+}
+/* One access to the card. A CPU address of zero is a missing window:
+ * reads return zero and writes are dropped. VGA ports split into byte
+ * cycles. Inlined into each caller, as the accesses were before hooks. */
+static inline __attribute__((always_inline)) void card_access(PCIInitContext *c, uint32_t space, uint32_t offset,
+                                                              uint32_t cpu, unsigned width, unsigned write,
+                                                              uint32_t *value)
+{
+    if (!cpu) {
+        if (!write)
+            *value = 0;
+    } else if (space == PI_SPACE_IO && offset >= 0x3b0 && offset < 0x3e0) {
+        unsigned i;
+        uint32_t v = 0;
+        for (i = 0; i < width; ++i) {
+            if (write)
+                store(c, cpu + i, 1, (*value >> (8 * i)) & 255);
+            else
+                v |= load(c, cpu + i, 1) << (8 * i);
+        }
+        if (!write)
+            *value = v;
+    } else if (write)
+        transaction(c, cpu, width, 1, *value);
     else
-        value = *(volatile uint32_t *)address;
-    return swap(value, width);
+        *value = transaction(c, cpu, width, 0, 0);
+}
+/* The same access through the access hook. */
+static __attribute__((noinline)) uint32_t hooked_card(PCIInitContext *c, uint32_t space, uint32_t bar, uint32_t offset,
+                                                      uint32_t cpu, unsigned width, unsigned write, uint32_t *value)
+{
+    struct PCIInitAccessMsg m;
+    uint32_t verdict = before_hook(c, &m, space, bar, offset, width, write, value);
+    if (verdict != PI_HOOK_PASS)
+        return verdict == PI_HOOK_FAULT;
+    card_access(c, space, offset, cpu, width, write, value);
+    return after_hook(c, &m, write, value);
+}
+/* Returns the access status: nonzero stops the run. */
+static inline __attribute__((always_inline)) uint32_t card(PCIInitContext *c, uint32_t space, uint32_t bar,
+                                                           uint32_t offset, uint32_t cpu, unsigned width,
+                                                           unsigned write, uint32_t *value)
+{
+    if (c->hook)
+        return hooked_card(c, space, bar, offset, cpu, width, write, value);
+    card_access(c, space, offset, cpu, width, write, value);
+    return 0;
 }
 void pi_trace(PCIInitContext *c, uint32_t op, uint32_t addr, uint32_t width, uint32_t value)
 {
@@ -103,7 +261,7 @@ static void read_bars(PCIInitContext *c)
         bus &= ~15U;
         if (!bus || size > 0xffffffffU - bus || size > 0xffffffffU - cpu)
             continue;
-        c->bars[c->bar_count++] = (struct PIBar){bus, cpu, size};
+        c->bars[c->bar_count++] = (struct PIBar){bus, cpu, size, i};
     }
 }
 uint32_t pi_hardware_start(PCIInitContext *c)
@@ -167,11 +325,14 @@ uint32_t pi_hardware_start(PCIInitContext *c)
             op_unregion(c->pci, c->board, probe);
         c->legacy = op_region(c->pci, c->board, PI_LEGACY_BASE, PI_LEGACY_BYTES);
     }
+    trap_install(c);
     return PI_OK;
 }
 void pi_hardware_finish(PCIInitContext *c)
 {
     struct ExecBase *SysBase = c->owner->sys;
+    if (c->trap.code)
+        trap_remove(c);
     if (c->legacy)
         op_unregion(c->pci, c->board, c->legacy);
     if (c->legacy_missed)
@@ -195,18 +356,24 @@ static uint32_t config(PCIInitContext *c, uint32_t bdf, uint32_t reg, unsigned w
         *value = 0xffffffffU;
         return 0;
     }
-    if (write) {
-        /* Permit no-op writes and command I/O/memory enables only. */
-        if (*value == op_read(c->pci, c->board, reg, width))
-            return 0;
-        if (reg == PCI_COMMAND && width <= 2 && !(*value & ~3U)) {
-            op_write(c->pci, c->board, reg, *value, width);
-            return 0;
+    {
+        struct PCIInitAccessMsg m;
+        uint32_t verdict = before_hook(c, &m, PI_SPACE_CONFIG, 0, reg, width, write, value);
+        if (verdict != PI_HOOK_PASS)
+            return verdict == PI_HOOK_FAULT;
+        if (write) {
+            /* Permit no-op writes and command I/O/memory enables only. */
+            if (*value == op_read(c->pci, c->board, reg, width))
+                return 0;
+            if (reg == PCI_COMMAND && width <= 2 && !(*value & ~3U)) {
+                op_write(c->pci, c->board, reg, *value, width);
+                return 0;
+            }
+            return 1;
         }
-        return 1;
+        *value = op_read(c->pci, c->board, reg, width);
+        return after_hook(c, &m, 0, value);
     }
-    *value = op_read(c->pci, c->board, reg, width);
-    return 0;
 }
 #ifdef PCIINIT_RECORD
 #define pi_hardware_access hardware_recorded_body
@@ -216,22 +383,13 @@ static
 {
     unsigned write  = op == X86_WRITE || op == X86_OUT;
     uint32_t result = 1;
+    c->hook_changed = 0;
     if (op == X86_IN || op == X86_OUT) {
         if (c->diagnostics)
             ++c->diagnostics->io_accesses;
         if (address >= 0x3b0 && address + width <= 0x3e0) {
             /* VGA indexed ports define adjacent byte operations for OUTW. */
-            unsigned i;
-            uint32_t v = 0;
-            for (i = 0; i < width; ++i) {
-                if (write)
-                    *(volatile uint8_t *)(c->io + address + i) = *value >> (8 * i);
-                else
-                    v |= (uint32_t)*(volatile uint8_t *)(c->io + address + i) << (8 * i);
-            }
-            if (!write)
-                *value = v;
-            result = 0;
+            result = card(c, PI_SPACE_IO, 0, address, (uint32_t)c->io + address, width, write, value);
         } else if (address == 0xcf8 && width == 4) {
             if (write)
                 c->cf8 = *value;
@@ -337,44 +495,37 @@ static
              * what it owns (8514-style ports, a Trio64 BIOS's 32-bit write
              * to 8180h, a ViRGE's DDC port at E8h) and the bridge terminates
              * the rest. One aligned transaction of the guest's width. */
-            uint32_t cpu = (uint32_t)c->io + address;
-            if (write)
-                transaction(cpu, width, 1, *value);
-            else
-                *value = transaction(cpu, width, 0, 0);
-            result = 0;
+            result = card(c, PI_SPACE_IO, 0, address, (uint32_t)c->io + address, width, write, value);
         }
     } else if (op != X86_FETCH && legacy_range(address, width)) {
         if (c->diagnostics)
             ++c->diagnostics->vga_accesses;
-        if (!c->legacy) {
+        if (!c->legacy)
             c->legacy_missed = 1;
-            if (!write)
-                *value = 0;
-        } else {
-            uint32_t cpu = (uint32_t)c->legacy + (address - PI_LEGACY_BASE);
-            if (write)
-                transaction(cpu, width, 1, *value);
-            else
-                *value = transaction(cpu, width, 0, 0);
-        }
-        result = 0;
+        result = card(c, PI_SPACE_LEGACY, 0, address - PI_LEGACY_BASE,
+                      c->legacy ? (uint32_t)c->legacy + (address - PI_LEGACY_BASE) : 0, width, write, value);
     } else if (op != X86_FETCH && !(address & (width - 1))) {
         const struct PIBar *bar = find_bar(c, address, width);
         if (bar) {
             if (c->diagnostics)
                 ++c->diagnostics->bar_accesses;
-            if (c->bars_visible) {
-                uint32_t cpu = bar->cpu + (address - bar->bus);
-                if (write)
-                    transaction(cpu, width, 1, *value);
-                else
-                    *value = transaction(cpu, width, 0, 0);
-                result = 0;
+            /* A hidden BAR is refused unless the hook completes the access. */
+            if (c->bars_visible)
+                result = card(c, PI_SPACE_BAR, bar->index, address - bar->bus, bar->cpu + (address - bar->bus), width,
+                              write, value);
+            else if (hooked(c, PI_SPACE_BAR, bar->index, address - bar->bus, width)) {
+                struct PCIInitAccessMsg m;
+                uint32_t verdict =
+                    before_hook(c, &m, PI_SPACE_BAR, bar->index, address - bar->bus, width, write, value);
+                result = verdict != PI_HOOK_DONE;
             }
         }
     }
-    pi_trace(c, op, address, width, *value);
+    if (c->stop_bus_error && c->trap.faults != c->faults_seen) {
+        c->faults_seen = c->trap.faults;
+        result         = 1;
+    }
+    pi_trace(c, op | (c->hook_changed ? PI_TRACE_HOOKED : 0), address, width, *value);
     return result;
 }
 #ifdef PCIINIT_RECORD
@@ -520,43 +671,36 @@ static
     uint32_t bytes, i, room;
     volatile uint8_t *d;
     if (r.stride != (int32_t)r.width || !r.count || (r.width != 1 && r.width != 2 && r.width != 4) ||
-        !legacy_range(r.destination, r.width))
+        !legacy_range(r.destination, r.width) || c->stop_bus_error)
         return 0;
     room = PI_LEGACY_BYTES - (r.destination - PI_LEGACY_BASE);
     if (r.width * r.count > room)
         r.count = room / r.width;
     bytes = r.width * r.count;
-    d     = (volatile uint8_t *)c->legacy + (r.destination - PI_LEGACY_BASE);
+    /* Hooked elements take the scalar path. */
+    if (hooked(c, PI_SPACE_LEGACY, 0, r.destination - PI_LEGACY_BASE, bytes))
+        return 0;
+    d = (volatile uint8_t *)c->legacy + (r.destination - PI_LEGACY_BASE);
+    /* RAM bytes are already in guest memory order, and a 68k word or
+     * longword store of the first byte high keeps that order on the bus.
+     * A bus error ends the request; its remaining stores are dropped. */
     if (!c->legacy)
         c->legacy_missed = 1; /* dropped, see pi_hardware_access */
     else if (r.width == 1) {
         if (source)
-            for (i = 0; i < bytes; ++i)
-                d[i] = source[i];
+            pi_bus_copy8(d, source, r.count);
         else
-            for (i = 0; i < bytes; ++i)
-                d[i] = r.value;
+            pi_bus_fill8(d, r.value, r.count);
     } else if (r.width == 2) {
-        /* RAM bytes are already in guest memory order; a 68k word store
-         * of the first byte high keeps that order on the bus. */
-        volatile uint16_t *p = (volatile uint16_t *)d;
-        uint16_t v           = swap(r.value, 2);
         if (source)
-            for (i = 0; i < r.count; ++i)
-                p[i] = ((uint16_t)source[2 * i] << 8) | source[2 * i + 1];
+            pi_bus_copy16(d, source, r.count);
         else
-            for (i = 0; i < r.count; ++i)
-                p[i] = v;
+            pi_bus_fill16(d, swap(r.value, 2), r.count);
     } else {
-        volatile uint32_t *p = (volatile uint32_t *)d;
-        uint32_t v           = swap(r.value, 4);
         if (source)
-            for (i = 0; i < r.count; ++i)
-                p[i] = ((uint32_t)source[4 * i] << 24) | ((uint32_t)source[4 * i + 1] << 16) |
-                       ((uint32_t)source[4 * i + 2] << 8) | source[4 * i + 3];
+            pi_bus_copy32(d, source, r.count);
         else
-            for (i = 0; i < r.count; ++i)
-                p[i] = v;
+            pi_bus_fill32(d, swap(r.value, 4), r.count);
     }
 #ifdef PCIINIT_RECORD
     pi_record(PI_RECORD_BULK, &r, sizeof(r));
@@ -599,15 +743,16 @@ uint32_t pi_hardware_scan(PCIInitContext *c, const struct X86ScanRequest *s, uin
     return 0;
 #else
     uint32_t i, value = 0, cpu;
-    if (c->diagnostics || !s->count || s->stride != (int32_t)s->width ||
+    if (c->diagnostics || c->stop_bus_error || !s->count || s->stride != (int32_t)s->width ||
         (s->width != 1 && s->width != 2 && s->width != 4) || !legacy_range(s->address, s->width) ||
-        s->width * s->count > PI_LEGACY_BYTES - (s->address - PI_LEGACY_BASE))
+        s->width * s->count > PI_LEGACY_BYTES - (s->address - PI_LEGACY_BASE) ||
+        hooked(c, PI_SPACE_LEGACY, 0, s->address - PI_LEGACY_BASE, s->width * s->count))
         return 0;
     cpu = (uint32_t)c->legacy + (s->address - PI_LEGACY_BASE);
     if (!c->legacy)
         c->legacy_missed = 1;
     for (i = 0; i < s->count;) {
-        value = c->legacy ? transaction(cpu + i * s->width, s->width, 0, 0) : 0;
+        value = c->legacy ? transaction(c, cpu + i * s->width, s->width, 0, 0) : 0;
         ++i;
         if ((value == s->expected) != s->repeat_equal)
             break;

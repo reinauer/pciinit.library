@@ -5,6 +5,8 @@
 #include "runtime.h"
 #include "openpci_calls.h"
 #include "x86emu_calls.h"
+#include "bus.h"
+#include <utility/hooks.h>
 #define PI_RAM_BYTES 0x100000UL
 #define PI_ROM_BASE  0xc0000UL
 #define PI_RETURN    0x7000UL
@@ -15,10 +17,10 @@ struct PCIInitImage
     uint8_t *data;
     uint32_t crc; /* CRC-32 of the initialization image, for known-image quirks */
 };
-/* One assigned memory BAR: PCI address, CPU address and size. */
+/* One assigned memory BAR: PCI address, CPU address, size and BAR number. */
 struct PIBar
 {
-    uint32_t bus, cpu, size;
+    uint32_t bus, cpu, size, index;
 };
 #define PI_LEGACY_BASE  0xa0000UL
 #define PI_LEGACY_BYTES 0x20000UL
@@ -58,13 +60,25 @@ struct PCIInitContext
     uint8_t window_attributes[2];
     APTR framebuffer;
     uint8_t quirks;
+    uint8_t stop_bus_error;
+    uint8_t bus_routines; /* card accesses use the trap-safe bus.S routines (68040/060) */
+    uint8_t hook_changed; /* the hook changed or completed the current access */
+    uint8_t range_count;  /* 0: the hook sees every card access */
+    struct Hook *hook;
+    struct PCIInitAccessRange ranges[PI_MAX_ACCESS_RANGES];
+    struct PCIInitServiceLog *services;
+    struct PIBusTrap trap; /* installed between pi_hardware_start and pi_hardware_finish */
+    uint32_t faults_seen;  /* trap.faults already turned into a stop */
 };
 struct PIOptions
 {
     uint32_t *error;
-    uint32_t offline, hardware, quirks;
+    uint32_t offline, hardware, quirks, stop_bus_error, range_count;
     struct PCIInitDiagnostics *diagnostics;
     const struct X86Limits *limits;
+    struct Hook *hook;
+    const struct PCIInitAccessRange *ranges;
+    struct PCIInitServiceLog *services;
 };
 uint32_t pi_options(const struct TagItem *, struct PIOptions *);
 PCIInitImage *pi_load_file(struct PIBase *, const char *, const struct TagItem *);

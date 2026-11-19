@@ -1,5 +1,7 @@
 #include "private/pciinit.h"
 #include "private/version.h"
+#include <stddef.h>
+#include <string.h>
 const char lib_name[]  = "pciinit.library";
 const char lib_ident[] = PCIINIT_IDSTRING;
 static PCIInitImage *load_file(REG(const char *, path, a0), REG(const struct TagItem *, tags, a1), BASE)
@@ -33,13 +35,20 @@ static ULONG run(REG(PCIInitContext *, ctx, a0), REG(const PCIInitImage *, image
 {
     return pi_run(base, ctx, image);
 }
+/* Callers built before the bus error fields pass the shorter size. */
+#define PI_CONTEXT_INFO_V23 offsetof(struct PCIInitContextInfo, bus_errors)
 static ULONG context_info(REG(const PCIInitContext *, ctx, a0), REG(struct PCIInitContextInfo *, info, a1), BASE)
 {
-    if (!ctx || ctx->owner != base || !info || info->size != sizeof(*info))
+    uint32_t size;
+    if (!ctx || ctx->owner != base || !info)
+        return PI_BAD_ARGUMENT;
+    size = info->size;
+    if (size != sizeof(*info) && size != PI_CONTEXT_INFO_V23)
         return PI_BAD_ARGUMENT;
     if (ctx->info.state == PI_EXECUTING)
         return PI_BAD_STATE;
-    *info = ctx->info;
+    memcpy(info, &ctx->info, size);
+    info->size = size;
     return PI_OK;
 }
 static ULONG vbe_info(REG(PCIInitContext *, ctx, a0), REG(struct PCIInitVBEInfo *, info, a1), BASE)

@@ -184,11 +184,15 @@ build/pciinit/%.o: src/pciinit/%.c include/private/pciinit.h
 	mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -ffreestanding -fno-builtin -c $< -o $@
 
+build/pciinit/bus.o: src/pciinit/bus.S
+	mkdir -p $(@D)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 build/pciinit/lifecycle.o: src/runtime/library.c include/private/version.h build/version-options
 	mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(PCIINIT_VERSION_DEFS) $(CFLAGS) -DPCIINIT_LIBRARY -ffreestanding -fno-builtin -c $< -o $@
 
-build/pciinit.library: build/pciinit/resident.o build/pciinit/library.o build/pciinit/lifecycle.o build/pciinit/image.o build/pciinit/rom.o build/pciinit/context.o build/pciinit/hardware.o build/pciinit/vbe.o build/pciinit/vbe_parse.o build/pciinit/quirks.o build/runtime/memory.o
+build/pciinit.library: build/pciinit/resident.o build/pciinit/library.o build/pciinit/lifecycle.o build/pciinit/image.o build/pciinit/rom.o build/pciinit/context.o build/pciinit/hardware.o build/pciinit/vbe.o build/pciinit/vbe_parse.o build/pciinit/quirks.o build/pciinit/bus.o build/runtime/memory.o
 	$(CC) -nostdlib -m68020 -Wl,-e,_library_start $(filter %.o,$^) -lgcc -o $@
 
 build/pciinit-test: tests/pciinit.c build/pciinit.library build/x86emu.library
@@ -238,7 +242,7 @@ check-boing: build/host-boing-test build/boing-test
 
 check: check-boing
 
-build/allocation-test: tests/allocation.c build/pciinit/image.o build/pciinit/rom.o build/pciinit/context.o build/pciinit/hardware.o build/pciinit/quirks.o build/engine/engine.o $(BACKEND_OBJ) $(ENGINE_OBJ) build/x86emu.library
+build/allocation-test: tests/allocation.c build/pciinit/image.o build/pciinit/rom.o build/pciinit/context.o build/pciinit/hardware.o build/pciinit/quirks.o build/pciinit/bus.o build/engine/engine.o $(BACKEND_OBJ) $(ENGINE_OBJ) build/x86emu.library
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c %.o,$^) -o $@
 
 .PHONY: check-allocation check
@@ -249,10 +253,22 @@ check: check-engine check-rom check-library check-pciinit check-allocation
 
 -include $(wildcard build/*.d build/*/*.d)
 
-build/hardware-test: tests/hardware.c build/pciinit/hardware.o build/pciinit/context.o build/pciinit/image.o build/pciinit/rom.o build/pciinit/quirks.o build/runtime/memory.o
+build/hardware-test: tests/hardware.c build/pciinit/hardware.o build/pciinit/context.o build/pciinit/image.o build/pciinit/rom.o build/pciinit/quirks.o build/pciinit/bus.o build/runtime/memory.o
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c %.o,$^) -o $@
 
-build/post-test: tests/post.c build/pciinit/image.o build/pciinit/rom.o build/pciinit/context.o build/pciinit/hardware.o build/pciinit/vbe.o build/pciinit/vbe_parse.o build/pciinit/quirks.o build/runtime/memory.o
+build/hook-test: tests/hook.c build/pciinit/hardware.o build/pciinit/context.o build/pciinit/image.o build/pciinit/rom.o build/pciinit/quirks.o build/pciinit/bus.o build/runtime/memory.o build/compiler-options
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c %.o,$^) -o $@
+.PHONY: check-hook
+check-hook: build/hook-test
+	$(VAMOS) -S --vols-base-dir $(CURDIR)/build/vamos-hook -q -C 68020 -s 128 -m 16384 -H disable build/hook-test
+check: check-hook
+
+# Native only: enters the bus-error trap handler with hand-built exception
+# frames from supervisor mode, which vamos cannot run. See tests/bustrap.c.
+build/bustrap-test: tests/bustrap.c tests/bustrap_s.S build/pciinit/bus.o build/compiler-options
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c %.S %.o,$^) -o $@
+
+build/post-test: tests/post.c build/pciinit/image.o build/pciinit/rom.o build/pciinit/context.o build/pciinit/hardware.o build/pciinit/vbe.o build/pciinit/vbe_parse.o build/pciinit/quirks.o build/pciinit/bus.o build/runtime/memory.o
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c %.o,$^) -o $@
 
 build/pciinit/resident.o: src/runtime/resident.S build/version-options
@@ -336,7 +352,7 @@ RECORD_OBJ = $(addprefix build/record/,$(addsuffix .o,image rom context hardware
 build/record/%.o: src/pciinit/%.c include/private/record.h
 	mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -DPCIINIT_RECORD -ffreestanding -fno-builtin -c $< -o $@
-build/post-record: tests/post_record.c $(RECORD_OBJ) build/runtime/memory.o
+build/post-record: tests/post_record.c $(RECORD_OBJ) build/pciinit/bus.o build/runtime/memory.o
 	$(CC) $(CPPFLAGS) $(CFLAGS) -DPCIINIT_RECORD $(filter %.c %.o,$^) -o $@
 
 REPLAY_FLAGS = -DREPLAY_JIT=$(if $(filter m68kjit,$(X86_BACKEND)),1,0)
@@ -378,7 +394,7 @@ build/compiler-options: compiler-options-force | build
 	@printf '%s\n' '$(CC) $(CPPFLAGS) $(CFLAGS)' > $@.tmp
 	@cmp -s $@.tmp $@ && rm $@.tmp || mv $@.tmp $@
 $(ENGINE_OBJ) $(WRAPPER_OBJ) $(RECORD_OBJ): build/compiler-options
-$(patsubst src/%.c,build/%.o,$(wildcard src/pciinit/*.c)) build/pcioprom-boing.o build/pcioprom-config.o \
+$(patsubst src/%.c,build/%.o,$(wildcard src/pciinit/*.c)) build/pciinit/bus.o build/pcioprom-boing.o build/pcioprom-config.o \
     build/pciinit/resident.o build/pciinit/library.o build/pciinit/lifecycle.o \
     build/x86emu/library.o build/x86emu/lifecycle.o build/runtime/resident.o: build/compiler-options
 

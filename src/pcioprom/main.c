@@ -30,7 +30,9 @@ static const char *status_name(uint32_t status)
                                         "unsupported graphics mode"};
     return status < sizeof(names) / sizeof(names[0]) ? names[status] : "unknown status";
 }
-static int list_modes, pattern, no_post, trace_accesses;
+static int list_modes, pattern, no_post, trace_accesses, log_services;
+static uint32_t service_entries[32];
+static struct PCIInitServiceLog services = {sizeof(services), 32, 0, service_entries};
 static uint32_t modes[16];
 static unsigned mode_count;
 static const char *rom_path, *config_path, *dump_path;
@@ -46,6 +48,8 @@ static int arguments(int argc, char **argv)
             pattern = 1;
         else if (!strcmp(argv[i], "--trace"))
             trace_accesses = 1;
+        else if (!strcmp(argv[i], "--services"))
+            log_services = 1;
         else if (!strcmp(argv[i], "--config")) {
             if (++i == argc || config_path)
                 return 0;
@@ -209,7 +213,19 @@ static int report(PCIInitContext *ctx, const struct PCIInitDiagnostics *diag)
     printf("  CPU stop=%lu instructions=%lu accesses=%lu fault=%08lx op=%lu INT=%lu\n", (ULONG)ci.execution.reason,
            (ULONG)ci.execution.instructions, (ULONG)ci.execution.accesses, (ULONG)ci.execution.address,
            (ULONG)ci.execution.operation, (ULONG)ci.execution.interrupt);
-    if (ci.warnings & PI_WARN_MISSING_SERVICE)
+    if (ci.warnings & PI_WARN_BUS_ERROR)
+        printf(
+            "  WARNING: %lu card access(es) ended in a 68k bus error, the first at %08lx;\n"
+            "  reads returned all-ones and writes were dropped, as on a PC\n",
+            (ULONG)ci.bus_errors, (ULONG)ci.bus_error_address);
+    if (log_services && services.count) {
+        unsigned i;
+        puts("  SERVICES: missing BIOS services, answered with AH=86h and CF set:");
+        for (i = 0; i < services.count; ++i)
+            printf("    INT %02lXh AX=%04lXh\n", (ULONG)(service_entries[i] >> 16),
+                   (ULONG)(service_entries[i] & 0xffff));
+    }
+    if ((ci.warnings & PI_WARN_MISSING_SERVICE) && !log_services)
         printf(
             "  MISSING: the ROM called INT %02lXh AX=%04lXh, a BIOS service neither it nor\n"
             "  pciinit.library provides; the run stopped there\n",
@@ -251,18 +267,17 @@ static __attribute__((noinline)) int run_main(int argc, char **argv)
     struct PCIInitTraceEntry trace[128];
     struct PCIInitDiagnostics diag = {.size = sizeof(diag)};
     struct X86Limits limits        = {sizeof(limits), 10000000, 30000000, 300000, NULL};
-    struct TagItem context_tags[]  = {{PII_Error, (ULONG)&status},
-                                      {PII_Hardware, 1},
-                                      {PII_Diagnostics, (ULONG)&diag},
-                                      {PII_Limits, (ULONG)&limits},
-                                      {TAG_DONE, 0}};
+    struct TagItem context_tags[]  = {{PII_Error, (ULONG)&status},     {PII_Hardware, 1},
+                                      {PII_Diagnostics, (ULONG)&diag}, {PII_Limits, (ULONG)&limits},
+                                      {TAG_IGNORE, (ULONG)&services},  {TAG_DONE, 0}};
     if (!arguments(argc, argv)) {
         puts(
-            "Usage: PCIoprom [--no-post | --list-modes] [--mode number ...] [--pattern] [--trace] [--config file] "
-            "[--dump file] [ROM-file]");
+            "Usage: PCIoprom [--no-post | --list-modes] [--mode number ...] [--pattern] [--trace] [--services] "
+            "[--config file] [--dump file] [ROM-file]");
         puts("Modes accept decimal or 0x-prefixed hex; --pattern requires --mode.");
         puts("--dump writes the first card ROM, as read from the card, to file.");
         puts("--trace lists the last 128 I/O, VGA, BAR and interrupt accesses after each run.");
+        puts("--services lets missing BIOS services fail instead of stopping, and lists them.");
         puts("Direct-color modes show a Boing Ball by default; --pattern draws test bars.");
         puts("ENV:/ENVARC:" OPROM_CONFIG_NAME " holds 'Ignore vendor:device' lines (device may be *).");
         return 20;
@@ -271,6 +286,8 @@ static __attribute__((noinline)) int run_main(int argc, char **argv)
         diag.capacity = 128;
         diag.entries  = trace;
     }
+    if (log_services)
+        context_tags[4].ti_Tag = PII_ServiceLog;
     PCIInitBase = OpenLibrary((STRPTR) "pciinit.library", PCIINIT_LIBRARY_VERSION);
     if (!PCIInitBase) {
         puts("Cannot open pciinit.library 2");

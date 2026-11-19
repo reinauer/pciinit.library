@@ -86,6 +86,7 @@ PCIoprom --no-post --dump RAM:card.rom
 PCIoprom --list-modes
 PCIoprom --mode 0x111 --mode 0x114 --mode 0x111 --pattern
 PCIoprom --trace
+PCIoprom --services
 ```
 
 Without arguments `PCIoprom` runs every card's own ROM. A file argument is
@@ -99,7 +100,9 @@ linear framebuffer is mapped and drawn directly; a banked mode, which is
 all a VBE 1.2 ROM offers, is drawn through the legacy VGA window when the
 bus board provides one, and otherwise the program says why nothing was
 drawn. `--trace` adds the last 128 I/O, VGA, BAR and interrupt accesses of
-each ROM run or failed BIOS call to the CPU summary. The last mode stays on
+each ROM run or failed BIOS call to the CPU summary. `--services` lets BIOS
+services that neither the ROM nor the library provides fail instead of
+stopping the run, and lists each one afterwards. The last mode stays on
 the display when the program exits.
 
 The exit code is 0 when every attempted initialization succeeded, 5 when a
