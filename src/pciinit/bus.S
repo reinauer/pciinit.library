@@ -18,7 +18,8 @@
  * 68040 and 68060, or whatever a CPU library passes on. hardware.c
  * therefore makes single accesses with plain loads and stores on the
  * 68020/030 and calls these routines for them only on the 68040/060;
- * string transfers to the legacy window use them on every CPU.
+ * string transfers and banked framebuffer copies through the legacy
+ * window use them on every CPU.
  *
  * The routines use only D0/D1/A0/A1 and never the stack, so returning
  * from the recovery point is a normal return from the routine. Stores are

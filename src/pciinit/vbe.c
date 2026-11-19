@@ -199,7 +199,8 @@ uint32_t pi_fb_transfer(struct PIBase *base, PCIInitContext *ctx, uint32_t offse
         window_base - PI_LEGACY_BASE > PI_LEGACY_BYTES - size)
         return PI_UNSUPPORTED_MAPPING;
     while (bytes) {
-        uint32_t bank = offset / granularity, within = offset - bank * granularity, chunk = size - within, i = 0;
+        uint32_t bank = offset / granularity, within = offset - bank * granularity, chunk = size - within, i = 0,
+                 faults;
         volatile uint8_t *cpu;
         if (chunk > bytes)
             chunk = bytes;
@@ -218,21 +219,26 @@ uint32_t pi_fb_transfer(struct PIBase *base, PCIInitContext *ctx, uint32_t offse
             return PI_UNSUPPORTED_MAPPING;
         }
         cpu = (volatile uint8_t *)ctx->legacy + (window_base - PI_LEGACY_BASE) + within;
-        /* Byte order is preserved either way; longwords only cut bus cycles. */
-        if (!(((uint32_t)cpu | (uint32_t)data) & 3))
-            for (; i + 4 <= chunk; i += 4) {
-                if (write)
-                    *(volatile uint32_t *)(cpu + i) = *(uint32_t *)(data + i);
-                else
-                    *(uint32_t *)(data + i) = *(volatile uint32_t *)(cpu + i);
-            }
-        for (; i < chunk; ++i) {
+        /* Byte order is preserved either way; longwords only cut bus cycles.
+         * The bus routines end the chunk at a bus error (see bus.S). */
+        faults = ctx->trap.faults;
+        if (!(((uint32_t)cpu | (uint32_t)data) & 3) && chunk >= 4) {
+            i = chunk & ~3U;
             if (write)
-                cpu[i] = data[i];
+                pi_bus_copy32(cpu, data, i / 4);
             else
-                data[i] = cpu[i];
+                pi_bus_copy32(data, (const void *)cpu, i / 4);
         }
+        if (i < chunk && ctx->trap.faults == faults) {
+            if (write)
+                pi_bus_copy8(cpu + i, data + i, chunk - i);
+            else
+                pi_bus_copy8(data + i, (const void *)(cpu + i), chunk - i);
+        }
+        faults = ctx->trap.faults != faults;
         pi_hardware_finish(ctx);
+        if (faults)
+            return PI_IO_ERROR;
         offset += chunk;
         data += chunk;
         bytes -= chunk;

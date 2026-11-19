@@ -195,24 +195,35 @@ static inline __attribute__((always_inline)) void card_access(PCIInitContext *c,
     else
         *value = transaction(c, cpu, width, 0, 0);
 }
-/* The same access through the access hook. */
-static __attribute__((noinline)) uint32_t hooked_card(PCIInitContext *c, uint32_t space, uint32_t bar, uint32_t offset,
+/* The same access through the access hook, and with the decode it needs
+ * turned off by the ROM, completed here as the master abort it would be:
+ * a PC host bridge returns all-ones for a cycle no device claims, where an
+ * Amiga bridge may end it with a bus error. */
+static __attribute__((noinline)) uint32_t detour_card(PCIInitContext *c, uint32_t space, uint32_t bar, uint32_t offset,
                                                       uint32_t cpu, unsigned width, unsigned write, uint32_t *value)
 {
     struct PCIInitAccessMsg m;
     uint32_t verdict = before_hook(c, &m, space, bar, offset, width, write, value);
     if (verdict != PI_HOOK_PASS)
         return verdict == PI_HOOK_FAULT;
-    card_access(c, space, offset, cpu, width, write, value);
+    if (c->decode & (space == PI_SPACE_IO ? PCI_COMMAND_IO : PCI_COMMAND_MEMORY))
+        card_access(c, space, offset, cpu, width, write, value);
+    else if (!write)
+        *value = 0xffffffffU >> (32 - 8 * width);
     return after_hook(c, &m, write, value);
+}
+static void set_decode(PCIInitContext *c, uint32_t command)
+{
+    c->decode = command & (PCI_COMMAND_IO | PCI_COMMAND_MEMORY);
+    c->detour = c->hook || c->decode != (PCI_COMMAND_IO | PCI_COMMAND_MEMORY);
 }
 /* Returns the access status: nonzero stops the run. */
 static inline __attribute__((always_inline)) uint32_t card(PCIInitContext *c, uint32_t space, uint32_t bar,
                                                            uint32_t offset, uint32_t cpu, unsigned width,
                                                            unsigned write, uint32_t *value)
 {
-    if (c->hook)
-        return hooked_card(c, space, bar, offset, cpu, width, write, value);
+    if (c->detour)
+        return detour_card(c, space, bar, offset, cpu, width, write, value);
     card_access(c, space, offset, cpu, width, write, value);
     return 0;
 }
@@ -325,6 +336,7 @@ uint32_t pi_hardware_start(PCIInitContext *c)
             op_unregion(c->pci, c->board, probe);
         c->legacy = op_region(c->pci, c->board, PI_LEGACY_BASE, PI_LEGACY_BYTES);
     }
+    set_decode(c, PCI_COMMAND_IO | PCI_COMMAND_MEMORY);
     trap_install(c);
     return PI_OK;
 }
@@ -367,6 +379,7 @@ static uint32_t config(PCIInitContext *c, uint32_t bdf, uint32_t reg, unsigned w
                 return 0;
             if (reg == PCI_COMMAND && width <= 2 && !(*value & ~3U)) {
                 op_write(c->pci, c->board, reg, *value, width);
+                set_decode(c, *value);
                 return 0;
             }
             return 1;
@@ -671,7 +684,7 @@ static
     uint32_t bytes, i, room;
     volatile uint8_t *d;
     if (r.stride != (int32_t)r.width || !r.count || (r.width != 1 && r.width != 2 && r.width != 4) ||
-        !legacy_range(r.destination, r.width) || c->stop_bus_error)
+        !legacy_range(r.destination, r.width) || c->stop_bus_error || !(c->decode & PCI_COMMAND_MEMORY))
         return 0;
     room = PI_LEGACY_BYTES - (r.destination - PI_LEGACY_BASE);
     if (r.width * r.count > room)
@@ -743,7 +756,8 @@ uint32_t pi_hardware_scan(PCIInitContext *c, const struct X86ScanRequest *s, uin
     return 0;
 #else
     uint32_t i, value = 0, cpu;
-    if (c->diagnostics || c->stop_bus_error || !s->count || s->stride != (int32_t)s->width ||
+    if (c->diagnostics || c->stop_bus_error || !(c->decode & PCI_COMMAND_MEMORY) || !s->count ||
+        s->stride != (int32_t)s->width ||
         (s->width != 1 && s->width != 2 && s->width != 4) || !legacy_range(s->address, s->width) ||
         s->width * s->count > PI_LEGACY_BYTES - (s->address - PI_LEGACY_BASE) ||
         hooked(c, PI_SPACE_LEGACY, 0, s->address - PI_LEGACY_BASE, s->width * s->count))

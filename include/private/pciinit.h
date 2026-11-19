@@ -62,6 +62,8 @@ struct PCIInitContext
     uint8_t quirks;
     uint8_t stop_bus_error;
     uint8_t bus_routines; /* card accesses use the trap-safe bus.S routines (68040/060) */
+    uint8_t decode;       /* PCI_COMMAND I/O and memory decode as the ROM last set them */
+    uint8_t detour;       /* card accesses take detour_card(): a hook is set or a decode is off */
     uint8_t hook_changed; /* the hook changed or completed the current access */
     uint8_t range_count;  /* 0: the hook sees every card access */
     struct Hook *hook;

@@ -234,7 +234,11 @@ the command register's I/O and memory enables are refused. VGA ports
 `3B0-3DF` are forwarded bytewise. Other ports go to the PCI bus at the
 guest's width, except the ones a PC chipset answers itself below `100h` and
 `CF8-CFF`. Memory accesses to the legacy window and the card's BARs keep
-the guest's width and byte order. Anything else is refused.
+the guest's width and byte order. Anything else is refused. While the ROM
+has turned off its card's I/O or memory decode, the library completes the
+accesses that decode covers as a PC completes a master abort, without a
+bus cycle: reads return all-ones and writes are dropped. The access hook
+still sees them first.
 
 The PIT is timed by the EClock. Channel 0 runs free as a system BIOS
 leaves it, mode 3 with a reload of 65536, and answers latch commands,
@@ -286,6 +290,8 @@ wait or touch other PCI regions while mapped. A failed restore returns
 `WriteFramebuffer` and `ReadFramebuffer` serve banked modes, which is all a
 VBE 1.2 ROM has. They take a byte offset into the visible pixels and switch
 banks with VBE function 05h. They need the legacy VGA window and return
-`PI_UNSUPPORTED_MAPPING` without it or for a linear mode.
+`PI_UNSUPPORTED_MAPPING` without it or for a linear mode. A bus error the
+trap handler catches (see `PI_WARN_BUS_ERROR`) ends the transfer at that
+bank with `PI_IO_ERROR`; it is counted like one during a BIOS call.
 
 Deleting a context leaves the last mode on screen.
