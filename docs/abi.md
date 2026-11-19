@@ -143,6 +143,74 @@ BIOS calls after it:
   neither its own vectors nor the library answer. The run stops as a fault
   and `missing_service` holds the vector in the upper half and AX in the
   lower half, e.g. INT 15h AX=F965h.
+- `PI_WARN_BUS_ERROR`: a card access ended in a 68k bus error. The library
+  treats it as an aborted PCI cycle: the read returned all-ones, the write
+  was dropped, and a bulk transfer stopped at that element. `bus_errors`
+  counts them since POST started and `bus_error_address` holds the Amiga
+  address of the first. With `PII_StopOnBusError=1` the access stops the
+  run as an access fault instead, and string transfers to the legacy window
+  run element by element so the fault names the instruction.
+
+`GetPCIContextInfo()` also accepts the 2.3 structure size, which ends
+before `bus_errors`, and fills only that much.
+
+Bus errors are caught by installing a trap handler as the calling task's
+`tc_TrapCode` while POST or a BIOS call runs. It handles access faults
+raised by the library's own card loads and stores for the ROM, in frame
+formats `$A`, `$B` (68020/030), `$7` (68040) and `$4` (68060). Any other trap restores the task's own handler
+and data and is passed to it unchanged. A bridge that stalls the bus
+instead of ending the cycle with a bus error cannot be recovered.
+
+Exec's bus error vector (Kickstart 3.1 and 3.2) decides what reaches the
+task. On the 68020 and 68030 it completes a data fault itself: the read
+returns zero, nothing is counted and no warning is set. On the 68040 and
+68060 it reads the frame as a 68020/030 one. When bit 8 of the fault
+address is clear it passes the fault on as trap 4, which the handler
+recognizes by the bus error vector in the frame; when that bit is set it
+returns into the faulting instruction, which faults again and the machine
+hangs before any task handler runs. The CPU libraries tested (MMULib
+68040/68060.library 47.2) pass bus errors on to exec's vector unchanged.
+
+`PII_ServiceLog` points to a caller-owned `PCIInitServiceLog` with
+`capacity` 0..256 entries. Each POST and BIOS call resets `count`. A
+missing service then fails as unsupported BIOS functions do, with AH=86h
+and CF set, and the run continues; each distinct vector/AX pair is stored
+once while there is room. `PI_WARN_MISSING_SERVICE` and `missing_service`
+still name the first one. Answering a service with failure can send a ROM
+down a path it never takes on a PC, so use the log to find missing
+services, not to run ROMs.
+
+`PII_AccessHook` points to a `struct Hook` that sees the card's own
+accesses before they reach the bus: I/O ports the library forwards to the
+card (VGA ports and the PCI I/O space, not the PC platform ports it
+emulates), the legacy window, memory BARs and the card's configuration
+space through CF8h/CFCh or the PCI BIOS. `h_Entry` is called with the hook
+in A0, the context in A2 and a `PCIInitAccessMsg` in A1, in the calling
+task while a library call runs. It must preserve D2-D7 and A2-A6, and its
+time counts toward the context's limits. `space`, `bar` and `offset` locate
+the access: a port number, an offset from A0000h, an offset into BAR
+`bar`, or a configuration register. `value` is the guest's numeric value.
+
+- `PI_PHASE_BEFORE` comes first for every access. `PI_HOOK_PASS` performs
+  it, a write with the possibly changed `value`. `PI_HOOK_DONE` completes it
+  without the card: a read returns `value` and a write is dropped.
+- `PI_PHASE_AFTER` follows a passed read with the value the card returned,
+  which the hook may change.
+- `PI_HOOK_FAULT`, or any unknown return value, stops the run as an access
+  fault.
+
+A passed configuration write still goes through the write filter
+described below, so the bus master bit stays clear. A hook that completes
+a configuration write with `PI_HOOK_DONE` is responsible for what it writes
+itself. A BAR the bridge hides is reachable only through `PI_HOOK_DONE`.
+Accesses a hook changed or completed carry `PI_TRACE_HOOKED` in their
+diagnostics trace entries.
+
+`PII_AccessRanges` points to up to `PI_MAX_ACCESS_RANGES` ranges ended by
+`space == PI_SPACE_END` and requires a hook. The hook is then called only
+for accesses that overlap a range; without the tag it sees every card
+access. String transfers to the legacy window that overlap a hooked range
+run element by element.
 
 `PII_Diagnostics` points to a caller-owned `PCIInitDiagnostics` with
 `capacity` 0..4096 trace entries. Keep it valid until deletion and read it

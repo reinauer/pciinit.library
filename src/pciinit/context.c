@@ -106,6 +106,20 @@ static uint32_t X86_CALLBACK scan(void *user, const struct X86ScanRequest *s, ui
         return pi_hardware_scan(c, s, last);
     return 0;
 }
+/* With a service log, a missing service fails as unsupported BIOS
+ * functions do (AH=86h, CF set) and the run goes on; each vector and AX
+ * pair is listed once. */
+static uint32_t log_service(struct PCIInitServiceLog *log, uint32_t service, struct X86Registers *r)
+{
+    uint32_t i;
+    for (i = 0; i < log->count && log->entries[i] != service; ++i)
+        ;
+    if (i == log->count && log->count < log->capacity)
+        log->entries[log->count++] = service;
+    r->eax    = (r->eax & 0xffff00ffU) | 0x8600;
+    r->eflags = r->eflags | 1;
+    return 1;
+}
 #ifdef PCIINIT_RECORD
 #define interrupt interrupt_recorded_body
 #endif
@@ -132,9 +146,14 @@ static uint32_t X86_CALLBACK interrupt(void *user, uint32_t number, uint32_t fau
         handled = pi_bios(ctx, number, r);
     else
         handled = 2;
-    if (handled == 2 && !(ctx->info.warnings & PI_WARN_MISSING_SERVICE)) {
-        ctx->info.warnings |= PI_WARN_MISSING_SERVICE;
-        ctx->info.missing_service = (number << 16) | (r->eax & 0xffff);
+    if (handled == 2) {
+        uint32_t service = (number << 16) | (r->eax & 0xffff);
+        if (!(ctx->info.warnings & PI_WARN_MISSING_SERVICE)) {
+            ctx->info.warnings |= PI_WARN_MISSING_SERVICE;
+            ctx->info.missing_service = service;
+        }
+        if (ctx->services)
+            handled = log_service(ctx->services, service, r);
     }
     return handled;
 }
@@ -153,6 +172,15 @@ static int valid_limits(const struct X86Limits *l)
 {
     return l && l->size == sizeof(*l) && l->instructions && l->accesses && l->milliseconds;
 }
+/* Counts a PI_SPACE_END-terminated range list; zero if it is malformed. */
+static uint32_t count_ranges(const struct PCIInitAccessRange *r)
+{
+    uint32_t n;
+    for (n = 0; n <= PI_MAX_ACCESS_RANGES && r[n].space != PI_SPACE_END; ++n)
+        if (r[n].space > PI_SPACE_CONFIG || r[n].first > r[n].last || (r[n].space == PI_SPACE_BAR && r[n].bar > 5))
+            return 0;
+    return n <= PI_MAX_ACCESS_RANGES ? n : 0;
+}
 PCIInitContext *pi_create(struct PIBase *base, struct pci_dev *board, const struct TagItem *tags)
 {
     struct ExecBase *SysBase = base->sys;
@@ -165,7 +193,10 @@ PCIInitContext *pi_create(struct PIBase *base, struct pci_dev *board, const stru
         (opts.diagnostics &&
          (opts.diagnostics->size != sizeof(*opts.diagnostics) || opts.diagnostics->capacity > 4096 ||
           (opts.diagnostics->capacity && !opts.diagnostics->entries))) ||
-        (opts.limits && !valid_limits(opts.limits))) {
+        (opts.limits && !valid_limits(opts.limits)) || (opts.hook && !opts.hook->h_Entry) ||
+        (opts.ranges && (!opts.hook || !(opts.range_count = count_ranges(opts.ranges)))) ||
+        (opts.services && (opts.services->size != sizeof(*opts.services) || opts.services->capacity > 256 ||
+                           (opts.services->capacity && !opts.services->entries)))) {
         status = PI_BAD_ARGUMENT;
         goto fail;
     }
@@ -178,10 +209,16 @@ PCIInitContext *pi_create(struct PIBase *base, struct pci_dev *board, const stru
         status = PI_NO_MEMORY;
         goto fail;
     }
-    ctx->owner               = base;
-    ctx->hardware            = opts.hardware;
-    ctx->diagnostics         = opts.diagnostics;
-    ctx->quirks              = !!opts.quirks;
+    ctx->owner          = base;
+    ctx->hardware       = opts.hardware;
+    ctx->diagnostics    = opts.diagnostics;
+    ctx->quirks         = !!opts.quirks;
+    ctx->stop_bus_error = !!opts.stop_bus_error;
+    ctx->hook           = opts.hook;
+    ctx->range_count    = opts.range_count;
+    ctx->services       = opts.services;
+    if (opts.range_count)
+        memcpy(ctx->ranges, opts.ranges, opts.range_count * sizeof(ctx->ranges[0]));
     ctx->info.size           = sizeof(ctx->info);
     ctx->info.offline        = !!opts.offline;
     ctx->info.execution.size = sizeof(ctx->info.execution);
@@ -279,8 +316,12 @@ uint32_t pi_run(struct PIBase *base, PCIInitContext *ctx, const PCIInitImage *im
 #ifdef PCIINIT_RECORD
     pi_record_mark(0);
 #endif
-    ctx->info.warnings        = 0;
-    ctx->info.missing_service = 0;
+    ctx->info.warnings          = 0;
+    ctx->info.missing_service   = 0;
+    ctx->info.bus_errors        = 0;
+    ctx->info.bus_error_address = 0;
+    if (ctx->services)
+        ctx->services->count = 0;
     if (!ctx->info.offline) {
         uint32_t status = pi_hardware_start(ctx);
         if (status)

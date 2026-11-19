@@ -1,5 +1,6 @@
 #include <proto/exec.h>
 #include <proto/pciinit.h>
+#include <utility/hooks.h>
 #include "private/openpci_calls.h"
 #include <stdio.h>
 #include <string.h>
@@ -103,7 +104,93 @@ static void missing_service_case(void)
     if (ctx)
         CHECK(DeletePCIContext(ctx) == PI_OK);
 }
-/* Only the current structure size is accepted. */
+/* With a service log, missing services fail with AH=86h and CF set, the
+ * run continues and each vector/AX pair is listed once. */
+static void service_log_case(void)
+{
+    /* int 13h; jc +1; hlt; int 13h with the same AX; int 15h; retf */
+    static const unsigned char code[] = {0xb8, 0x01, 0x02, 0xcd, 0x13, 0x72, 0x01, 0xf4, 0xb8, 0x01,
+                                         0x02, 0xcd, 0x13, 0xb8, 0x65, 0xf9, 0xcd, 0x15, 0xcb};
+    uint32_t entries[4];
+    struct PCIInitServiceLog log   = {sizeof(log), 4, 99, entries};
+    struct PCIInitServiceLog small = {sizeof(small), 1, 0, entries};
+    PCIInitImage *image;
+    PCIInitContext *ctx;
+    struct TagItem tags[]          = {{PII_Offline, 1}, {PII_ServiceLog, (ULONG)&log}, {TAG_DONE, 0}};
+    struct PCIInitContextInfo info = {.size = sizeof(info)};
+    make_rom(code, sizeof(code));
+    image = LoadOptionROMFromFile(path, loadtags);
+    CHECK(image != NULL);
+    ctx = CreatePCIContext(NULL, tags);
+    CHECK(ctx != NULL);
+    if (ctx && image) {
+        CHECK(RunOptionROM(ctx, image) == PI_OK);
+        CHECK(GetPCIContextInfo(ctx, &info) == PI_OK);
+        CHECK((info.warnings & PI_WARN_MISSING_SERVICE) && info.missing_service == 0x00130201UL);
+        CHECK(log.count == 2 && entries[0] == 0x00130201UL && entries[1] == 0x0015f965UL);
+    }
+    if (ctx)
+        CHECK(DeletePCIContext(ctx) == PI_OK);
+    /* A full log keeps the first services and the run still continues. */
+    tags[1].ti_Data = (ULONG)&small;
+    ctx             = CreatePCIContext(NULL, tags);
+    CHECK(ctx != NULL);
+    if (ctx && image) {
+        CHECK(RunOptionROM(ctx, image) == PI_OK);
+        CHECK(small.count == 1 && entries[0] == 0x00130201UL);
+    }
+    if (ctx)
+        CHECK(DeletePCIContext(ctx) == PI_OK);
+    if (image)
+        CHECK(FreeOptionROM(image) == PI_OK);
+}
+/* Malformed hook, range and log arguments are refused at creation. */
+static void access_argument_case(void)
+{
+    static const struct PCIInitAccessRange ranges[] = {{PI_SPACE_IO, 0, 0x3c0, 0x3cf}, {PI_SPACE_END, 0, 0, 0}};
+    static const struct PCIInitAccessRange bad[]    = {{PI_SPACE_BAR, 6, 0, 1}, {PI_SPACE_END, 0, 0, 0}};
+    static const struct PCIInitAccessRange empty[]  = {{PI_SPACE_END, 0, 0, 0}};
+    struct PCIInitAccessRange many[PI_MAX_ACCESS_RANGES + 1];
+    struct Hook none = {{NULL, NULL}, NULL, NULL, NULL}, hook = {{NULL, NULL}, (ULONG (*)())1, NULL, NULL};
+    struct PCIInitServiceLog log = {sizeof(log) - 4, 0, 0, NULL};
+    struct TagItem tags[]        = {
+        {PII_Offline, 1}, {TAG_IGNORE, 0}, {TAG_IGNORE, 0}, {PII_Error, (ULONG)&error}, {TAG_DONE, 0}};
+    PCIInitContext *ctx;
+    unsigned i;
+    for (i = 0; i < PI_MAX_ACCESS_RANGES; ++i)
+        many[i] = ranges[0];
+    many[i]         = ranges[1];
+    tags[1].ti_Tag  = PII_AccessHook;
+    tags[1].ti_Data = (ULONG)&none;
+    CHECK(!CreatePCIContext(NULL, tags) && error == PI_BAD_ARGUMENT);
+    tags[1].ti_Data = (ULONG)&hook;
+    tags[2].ti_Tag  = PII_AccessRanges;
+    tags[2].ti_Data = (ULONG)bad;
+    CHECK(!CreatePCIContext(NULL, tags) && error == PI_BAD_ARGUMENT);
+    tags[2].ti_Data = (ULONG)empty;
+    CHECK(!CreatePCIContext(NULL, tags) && error == PI_BAD_ARGUMENT);
+    tags[2].ti_Data = (ULONG)ranges;
+    ctx             = CreatePCIContext(NULL, tags);
+    CHECK(ctx != NULL && error == PI_OK);
+    if (ctx)
+        CHECK(DeletePCIContext(ctx) == PI_OK);
+    tags[2].ti_Data = (ULONG)many;
+    ctx             = CreatePCIContext(NULL, tags);
+    CHECK(ctx != NULL && error == PI_OK);
+    if (ctx)
+        CHECK(DeletePCIContext(ctx) == PI_OK);
+    /* Ranges need a hook. */
+    tags[1].ti_Tag = TAG_IGNORE;
+    CHECK(!CreatePCIContext(NULL, tags) && error == PI_BAD_ARGUMENT);
+    tags[2].ti_Tag  = PII_ServiceLog;
+    tags[2].ti_Data = (ULONG)&log;
+    CHECK(!CreatePCIContext(NULL, tags) && error == PI_BAD_ARGUMENT);
+    log.size     = sizeof(log);
+    log.capacity = 1;
+    CHECK(!CreatePCIContext(NULL, tags) && error == PI_BAD_ARGUMENT);
+}
+/* The current structure size and the 2.3 size without the bus error
+ * fields are accepted. */
 static void context_info_size_case(void)
 {
     struct PCIInitContextInfo info = {.size = sizeof(info) - sizeof(uint32_t)};
@@ -116,6 +203,11 @@ static void context_info_size_case(void)
     info.size = sizeof(info);
     CHECK(GetPCIContextInfo(ctx, &info) == PI_OK);
     CHECK(info.size == sizeof(info) && info.state == PI_CREATED && info.offline == 1 && info.warnings == 0);
+    memset(&info, 0xaa, sizeof(info));
+    info.size = offsetof(struct PCIInitContextInfo, bus_errors);
+    CHECK(GetPCIContextInfo(ctx, &info) == PI_OK);
+    CHECK(info.size == offsetof(struct PCIInitContextInfo, bus_errors) && info.state == PI_CREATED);
+    CHECK(info.bus_errors == 0xaaaaaaaaU && info.bus_error_address == 0xaaaaaaaaU);
     CHECK(DeletePCIContext(ctx) == PI_OK);
 }
 static void card_case(const char *dump)
@@ -265,6 +357,8 @@ int main(int argc, char **argv)
     execute_case(ret, sizeof(ret), PI_EXECUTION_FAILED, X86_STOP_CANCEL, &cancel);
     diagnostic_case();
     missing_service_case();
+    service_log_case();
+    access_argument_case();
     context_info_size_case();
     if (argc > 1)
         card_case(argv[1]);

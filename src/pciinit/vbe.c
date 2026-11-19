@@ -26,6 +26,8 @@ uint32_t pi_int10(struct PIBase *base, PCIInitContext *ctx, struct X86Registers 
         ctx->diagnostics->count       = 0;
         ctx->diagnostics->io_accesses = ctx->diagnostics->vga_accesses = ctx->diagnostics->bar_accesses = 0;
     }
+    if (ctx->services)
+        ctx->services->count = 0;
     ctx->ram[PI_VBE_ENTRY]     = 0xcd;
     ctx->ram[PI_VBE_ENTRY + 1] = 0x10;
     ctx->ram[PI_VBE_ENTRY + 2] = 0xf4;

@@ -244,8 +244,9 @@ Interrupt dispatch separates library services from handlers the firmware
 installs, with normal chaining and return. VBE runs through the graphics
 ROM's own INT 10h handler. Services with a defined failure convention
 return failure; anything else stops the run with a diagnostic rather than
-inventing success. PC platform ports are never forwarded to unrelated PCI
-devices.
+inventing success. For diagnosis, a service log lets those fail with the
+generic BIOS failure status instead and lists each one. PC platform ports
+are never forwarded to unrelated PCI devices.
 
 ## Address translation and PCI access
 
@@ -260,6 +261,26 @@ An access resolves to guest RAM, shadow ROM, the selected card's
 resources, legacy VGA memory, port I/O or platform emulation. Hardware
 accesses keep their transaction width, volatility and the bridge's byte
 order; a word or long transaction is never split into byte operations.
+
+A card access that ends in a 68k bus error is completed the way a PC
+completes an aborted PCI cycle: the read returns all-ones and the write is
+dropped. Card loads and stores go through a small set of assembler
+routines, and while the card is owned a task trap handler resumes a fault
+inside them at a recovery point. A ROM whose memory test runs before its
+memory clock is stable then sees a failed test and retries, as it would on
+a PC, instead of taking the machine down. Each event is counted and
+reported. Exec's own bus error vector limits this: on the 68020/030 it
+completes the access itself (reads return zero, nothing is counted), and
+on the 68040/060 only faults whose address has bit 8 clear reach the task;
+docs/abi.md has the details. Since nothing reaches the handler on the
+68020/030, single accesses there stay plain loads and stores and cost
+nothing extra.
+
+An optional access hook gives a driver the card's I/O, legacy window, BAR
+and configuration accesses before and after they reach the bus, so it can
+adjust a value for an Amiga bridge, complete an access itself or stop the
+run. Platform services the library emulates are not card accesses and are
+not hooked.
 
 PCI BIOS configuration calls and CF8/CFC accesses share one identity and
 policy model. Assigned BARs are preserved: resource probes and relocation
@@ -348,7 +369,9 @@ PCIoprom --mode 0x111 --mode 0x114 --mode 0x111 --pattern
 PCIoprom scans all cards, loads each matching ROM, runs POST and reports
 the result. `--no-post` stops after the loader and preflight checks, and
 `--dump` writes the first card ROM, as read through the bridge, to a file.
-A ROM file is matched to a card by PCI vendor and device.
+A ROM file is matched to a card by PCI vendor and device. `--trace` lists
+the last accesses of each run, and `--services` lists BIOS services the
+ROM called that nobody provides, letting them fail instead of stopping.
 
 Mode options initialize a context and run every operation within that
 invocation. Direct-color modes show a centered red-and-white Boing Ball on
