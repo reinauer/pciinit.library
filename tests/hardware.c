@@ -54,6 +54,19 @@ static void master_abort_case(PCIInitContext *c, struct Library *pci, struct pci
     c->stop_bus_error = 0;
     op_write(pci, board, PCI_COMMAND, owned, 2);
     CHECK(pi_hardware_access(c, c->bars[0].bus, 4, X86_READ, &v) == 0);
+    /* Turned off by the ROM's own configuration write, the decode is
+     * known and the abort never reaches the bus: all-ones on every CPU. */
+    v = 0x80000000U | (c->bdf << 8) | PCI_COMMAND;
+    CHECK(pi_hardware_access(c, 0xcf8, 4, X86_OUT, &v) == 0);
+    v = PCI_COMMAND_IO;
+    CHECK(pi_hardware_access(c, 0xcfc, 2, X86_OUT, &v) == 0);
+    v    = c->trap.faults;
+    read = 1;
+    CHECK(pi_hardware_access(c, c->bars[0].bus, 4, X86_READ, &read) == 0 && read == 0xffffffffU &&
+          c->trap.faults == v);
+    v = PCI_COMMAND_IO | PCI_COMMAND_MEMORY;
+    CHECK(pi_hardware_access(c, 0xcfc, 2, X86_OUT, &v) == 0);
+    op_write(pci, board, PCI_COMMAND, owned, 2);
     c->info.warnings   = 0;
     c->info.bus_errors = 0;
     pi_hardware_finish(c);

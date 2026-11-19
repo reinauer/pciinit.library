@@ -123,6 +123,8 @@ static void reset(int hooked)
     before_verdict = after_verdict = PI_HOOK_PASS;
     replace_before = replace_after = 0;
     ctx.hook                       = hooked ? &hook : NULL;
+    ctx.detour                     = hooked;
+    ctx.decode                     = PCI_COMMAND_IO | PCI_COMMAND_MEMORY;
     ctx.range_count                = 0;
     ctx.stop_bus_error             = 0;
     ctx.trap.faults = ctx.faults_seen = 0;
@@ -294,6 +296,45 @@ static void config_case(void)
     CHECK(access(0xcfc, 2, X86_OUT, 3, NULL) == 0 && config_space[4] == 3);
 }
 
+/* With a decode turned off by the ROM, the access is a master abort the
+ * library completes: reads return all-ones, writes are dropped. */
+static void decode_case(void)
+{
+    const uint8_t source[4]    = {1, 2, 3, 4};
+    struct X86BulkRequest copy = {sizeof(copy), X86_BULK_COPY, 0, 0xa0300, 1, 4, 0, 1};
+    struct X86ScanRequest scan = {sizeof(scan), 0xa0100, 2, 4, 0x1234, 1, 2};
+    uint32_t v, last, cf8 = 0x80000000U | (ctx.bdf << 8) | PCI_COMMAND;
+    struct PCIInitDiagnostics *d0 = ctx.diagnostics;
+    reset(0);
+    io[0x8180] = 0x5a;
+    CHECK(access(0xcf8, 4, X86_OUT, cf8, NULL) == 0);
+    CHECK(access(0xcfc, 2, X86_OUT, PCI_COMMAND_IO, NULL) == 0 && config_space[4] == 1 && ctx.detour);
+    CHECK(access(0xa0010, 2, X86_READ, 0, &v) == 0 && v == 0xffff);
+    CHECK(access(0xa0020, 1, X86_WRITE, 0x77, NULL) == 0 && legacy[0x20] == 0);
+    CHECK(access(0xe0000100, 4, X86_READ, 0, &v) == 0 && v == 0xffffffffU);
+    CHECK(access(0x8180, 1, X86_IN, 0, &v) == 0 && v == 0x5a);
+    ctx.diagnostics = NULL;
+    CHECK(pi_hardware_bulk(&ctx, &copy, source) == 0 && legacy[0x300] == 0);
+    CHECK(pi_hardware_scan(&ctx, &scan, &last) == 0);
+    ctx.diagnostics = d0;
+    CHECK(access(0xcfc, 1, X86_OUT, PCI_COMMAND_MEMORY, NULL) == 0 && config_space[4] == 2);
+    CHECK(access(0x8180, 4, X86_IN, 0, &v) == 0 && v == 0xffffffffU);
+    CHECK(access(0x3c4, 2, X86_IN, 0, &v) == 0 && v == 0xffff);
+    CHECK(access(0x8181, 1, X86_OUT, 0x66, NULL) == 0 && io[0x8181] != 0x66);
+    CHECK(access(0xa0010, 2, X86_READ, 0, &v) == 0 && v == 0x1234);
+    /* The hook still sees the access first and may complete it. */
+    reset(1);
+    ctx.decode     = PCI_COMMAND_MEMORY;
+    before_verdict = PI_HOOK_DONE;
+    replace_before = 1;
+    before_value   = 0x42;
+    CHECK(access(0x8180, 1, X86_IN, 0, &v) == 0 && v == 0x42 && calls == 1);
+    reset(0);
+    ctx.decode = 0;
+    ctx.detour = 1;
+    CHECK(access(0xcfc, 2, X86_OUT, PCI_COMMAND_IO | PCI_COMMAND_MEMORY, NULL) == 0 && !ctx.detour);
+}
+
 static void bus_error_case(void)
 {
     uint32_t v;
@@ -355,6 +396,7 @@ int main(void)
     range_case();
     fast_path_case();
     config_case();
+    decode_case();
     bus_error_case();
     printf("HOOK RESULT checks=%u failures=%u\n", checks, failures);
     return failures ? 20 : 0;

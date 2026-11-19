@@ -274,7 +274,10 @@ completes the access itself (reads return zero, nothing is counted), and
 on the 68040/060 only faults whose address has bit 8 clear reach the task;
 docs/abi.md has the details. Since nothing reaches the handler on the
 68020/030, single accesses there stay plain loads and stores and cost
-nothing extra.
+nothing extra. A ROM that turns off its card's I/O or memory decode and
+then touches the card would cause a master abort; the library knows the
+decode from the ROM's configuration writes and completes those accesses
+itself, without a bus cycle.
 
 An optional access hook gives a driver the card's I/O, legacy window, BAR
 and configuration accesses before and after they reach the bus, so it can
