@@ -38,8 +38,9 @@ def collect(dest, suite):
         'deadline': {'deadline-native-test.txt':'DEADLINE RESULT'},
         'bustrap': {'bustrap-test.txt': 'BUSTRAP RESULT'},
         'abortprobe': {'abortprobe.txt': 'ABORTPROBE RESULT'},
+        'log': {},
     }[suite]
-    scanners = ('post-record.txt',) if suite in ('record', 'profile') else ('post-timing.txt',) if suite == 'post-timing' else (suite+'.txt',) if suite in ('vbe-cli','boing-cli') else ('post.txt',) if suite == 'post' else ('pcioprom.txt', 'pcioprom-file.txt') if suite == 'foundation' else ()
+    scanners = ('post-record.txt',) if suite in ('record', 'profile') else ('post-timing.txt',) if suite == 'post-timing' else (suite+'.txt',) if suite in ('vbe-cli','boing-cli') else ('post.txt',) if suite == 'post' else ('log.txt',) if suite == 'log' else ('pcioprom.txt', 'pcioprom-file.txt') if suite == 'foundation' else ()
     launch = json.loads((dest / 'launch.json').read_text())
     if not launch.get('guest_done') or not launch.get('finished'):
         raise ValueError('guest run did not finish')
@@ -180,7 +181,7 @@ def collect(dest, suite):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--suite', choices=('foundation', 'backend', 'post', 'display', 'vbe', 'vbe-cli', 'boing-cli', 'post-timing', 'record', 'profile', 'deadline', 'bustrap', 'abortprobe'), default='foundation')
+    parser.add_argument('--suite', choices=('foundation', 'backend', 'post', 'display', 'vbe', 'vbe-cli', 'boing-cli', 'post-timing', 'record', 'profile', 'deadline', 'bustrap', 'abortprobe', 'log'), default='foundation')
     parser.add_argument('--output', type=Path, default=ROOT / 'fixture/out/guest-test/foundation',
                         help='output path prefix for JSON and text reports')
     args = parser.parse_args()

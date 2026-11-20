@@ -88,6 +88,7 @@ PCIoprom --mode 0x111 --mode 0x114 --mode 0x111 --pattern
 PCIoprom --trace
 PCIoprom --services
 PCIoprom --release-vga
+PCIoprom --log RAM:access.log --mode 0x111
 ```
 
 Without arguments `PCIoprom` runs every card's own ROM. A file argument is
@@ -108,7 +109,11 @@ stopping the run, and lists each one afterwards. After each ROM run a
 VGA memory. When a card cannot run because another display card answers
 the VGA ports, the program names that card. `--release-vga` turns each
 card's VGA port and memory decode off after use, so the next card can
-have them. The last mode stays on the display when the program exits.
+have them. `--log` writes every card access of each POST and BIOS call to
+a text file: port, VGA memory, BAR and configuration reads and writes in
+order, with the values, and with repeated accesses (polling loops) and
+fills folded into one line each. Runs with `--log` are slower. The last
+mode stays on the display when the program exits.
 
 The exit code is 0 when every attempted initialization succeeded, 5 when a
 POST could not run or no usable ROM was found, and 20 on errors.

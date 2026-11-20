@@ -41,6 +41,7 @@ allocated into the legacy VGA area, and has no RTG driver. Suites:
 | `post-timing`, `record`, `profile`, `deadline` | measurement and recording runs |
 | `bustrap` | `bustrap-test`: the bus-error trap handler with hand-built exception frames; needs no `--rom` |
 | `abortprobe` | `abortprobe`: what the bridge does with a PCI cycle no device claims (all-ones, or a bus error with `--master-abort`) |
+| `log` | `PCIoprom --log SYS:access.log --mode 0x111`: the access log of POST and a mode set |
 
 `run_guest.py` launches the emulator headless with a time limit and archives
 the previous reports; `done.txt` only proves script completion. A leftover
