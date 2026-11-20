@@ -141,7 +141,8 @@ BIOS calls after it:
   were dropped.
 - `PI_WARN_MISSING_SERVICE`: the ROM called a software interrupt that
   neither its own vectors nor the library answer. The run stops as a fault
-  and `missing_service` holds the vector in the upper half and AX in the
+  (with `PII_ServiceLog` the call fails and the run goes on) and
+  `missing_service` holds the vector in the upper half and AX in the
   lower half, e.g. INT 15h AX=F965h.
 - `PI_WARN_BUS_ERROR`: a card access ended in a 68k bus error. The library
   treats it as an aborted PCI cycle: the read returned all-ones, the write
@@ -158,7 +159,8 @@ Bus errors are caught by installing a trap handler as the calling task's
 `tc_TrapCode` while POST or a BIOS call runs. It handles access faults
 raised by the library's own card loads and stores for the ROM, in frame
 formats `$A`, `$B` (68020/030), `$7` (68040) and `$4` (68060). Any other trap restores the task's own handler
-and data and is passed to it unchanged. A bridge that stalls the bus
+and data and is passed to it unchanged; bus errors later in that POST or
+BIOS call are then not recovered. A bridge that stalls the bus
 instead of ending the cycle with a bus error cannot be recovered.
 
 Exec's bus error vector (Kickstart 3.1 and 3.2) decides what reaches the
@@ -197,7 +199,8 @@ the access: a port number, an offset from A0000h, an offset into BAR
 - `PI_PHASE_AFTER` follows a passed read with the value the card returned,
   which the hook may change.
 - `PI_HOOK_FAULT`, or any unknown return value, stops the run as an access
-  fault.
+  fault. For a configuration access the ROM makes through the PCI BIOS
+  (INT 1Ah), the run stops at that call as a fault.
 
 A passed configuration write still goes through the write filter
 described below, so the bus master bit stays clear. A hook that completes

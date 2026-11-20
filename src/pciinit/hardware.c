@@ -102,6 +102,7 @@ static void trap_install(PCIInitContext *c)
     c->bus_routines          = !!(SysBase->AttnFlags & AFF_68040);
     task->tc_TrapData        = &c->trap;
     task->tc_TrapCode        = (APTR)pi_bus_trap;
+    c->trap_installed        = 1;
 }
 static void trap_remove(PCIInitContext *c)
 {
@@ -115,7 +116,7 @@ static void trap_remove(PCIInitContext *c)
         c->info.bus_errors += c->trap.faults;
         c->info.warnings |= PI_WARN_BUS_ERROR;
     }
-    c->trap.code = NULL;
+    c->trap_installed = 0;
 }
 /* Whether the access hook wants an access of width bytes at offset. */
 static int hooked(const PCIInitContext *c, uint32_t space, uint32_t bar, uint32_t offset, uint32_t width)
@@ -207,6 +208,8 @@ static __attribute__((noinline)) uint32_t detour_card(PCIInitContext *c, uint32_
     uint32_t verdict = before_hook(c, &m, space, bar, offset, width, write, value);
     if (verdict != PI_HOOK_PASS)
         return verdict == PI_HOOK_FAULT;
+    if (space == PI_SPACE_LEGACY && !cpu)
+        c->legacy_missed = 1;
     if (c->decode & (space == PI_SPACE_IO ? PCI_COMMAND_IO : PCI_COMMAND_MEMORY))
         card_access(c->bus_routines, space, offset, cpu, width, write, value);
     else if (!write)
@@ -350,7 +353,7 @@ uint32_t pi_hardware_start(PCIInitContext *c)
 void pi_hardware_finish(PCIInitContext *c)
 {
     struct ExecBase *SysBase = c->owner->sys;
-    if (c->trap.code)
+    if (c->trap_installed)
         trap_remove(c);
     if (c->legacy)
         op_unregion(c->pci, c->board, c->legacy);
@@ -364,7 +367,9 @@ void pi_hardware_finish(PCIInitContext *c)
     c->timer      = NULL;
     c->timer_port = NULL;
 }
-/* Reads enumerate only the owned card. No probes or relocation reach hardware. */
+/* Reads enumerate only the owned card. No probes or relocation reach
+ * hardware. Returns 0, 1 for a refused access, or 2 when the access hook
+ * stopped the run. */
 static uint32_t config(PCIInitContext *c, uint32_t bdf, uint32_t reg, unsigned width, unsigned write, uint32_t *value)
 {
     if (reg >= 256 || width > 256 - reg || (reg & (width - 1)))
@@ -379,7 +384,7 @@ static uint32_t config(PCIInitContext *c, uint32_t bdf, uint32_t reg, unsigned w
         struct PCIInitAccessMsg m;
         uint32_t verdict = before_hook(c, &m, PI_SPACE_CONFIG, 0, reg, width, write, value);
         if (verdict != PI_HOOK_PASS)
-            return verdict == PI_HOOK_FAULT;
+            return verdict == PI_HOOK_FAULT ? 2 : 0;
         if (write) {
             /* Permit no-op writes and command I/O/memory enables only. */
             if (*value == op_read(c->pci, c->board, reg, width))
@@ -392,7 +397,7 @@ static uint32_t config(PCIInitContext *c, uint32_t bdf, uint32_t reg, unsigned w
             return 1;
         }
         *value = op_read(c->pci, c->board, reg, width);
-        return after_hook(c, &m, 0, value);
+        return after_hook(c, &m, 0, value) ? 2 : 0;
     }
 }
 #ifdef PCIINIT_RECORD
@@ -519,7 +524,8 @@ static
     } else if (op != X86_FETCH && legacy_range(address, width)) {
         if (c->diagnostics)
             ++c->diagnostics->vga_accesses;
-        if (!c->legacy)
+        /* With a hook, detour_card() flags it unless the hook completes it. */
+        if (!c->legacy && !c->hook)
             c->legacy_missed = 1;
         result = card(c, PI_SPACE_LEGACY, 0, address - PI_LEGACY_BASE,
                       c->legacy ? (uint32_t)c->legacy + (address - PI_LEGACY_BASE) : 0, width, write, value);
@@ -666,6 +672,8 @@ uint32_t pi_bios(PCIInitContext *c, uint32_t number, struct X86Registers *r)
             uint32_t value  = r->ecx & (width == 1 ? 255U : width == 2 ? 65535U : 0xffffffffU);
             uint32_t failed = config(c, r->ebx & 65535, r->edi & 65535, width, write, &value);
             c->hook_changed = 0; /* marks traced port accesses only */
+            if (failed == 2)
+                return 3; /* the hook stops the run here */
             if (failed)
                 bios_status(r, 0x87);
             else {

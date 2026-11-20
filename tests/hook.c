@@ -306,6 +306,43 @@ static void config_case(void)
     CHECK(access(0xcf8, 4, X86_OUT, cf8 | 4, NULL) == 0);
     CHECK(access(0xcfc, 2, X86_OUT, 7, NULL) == 1 && config_space[4] == 0);
     CHECK(access(0xcfc, 2, X86_OUT, 3, NULL) == 0 && config_space[4] == 3);
+    /* Through the PCI BIOS a hook fault stops the run instead of
+     * answering AH=87h, before and after the access. */
+    {
+        struct X86Registers r = {.size = sizeof(r)};
+        reset(1);
+        before_verdict = PI_HOOK_FAULT;
+        r.eax          = 0xb109;
+        r.ebx          = ctx.bdf;
+        r.edi          = 0;
+        CHECK(pi_bios(&ctx, 0x1a, &r) == 3);
+        reset(1);
+        after_verdict = PI_HOOK_FAULT;
+        r.eax         = 0xb109;
+        CHECK(pi_bios(&ctx, 0x1a, &r) == 3);
+        reset(1);
+        r.eax = 0xb109;
+        CHECK(pi_bios(&ctx, 0x1a, &r) == 1 && !(r.eflags & 1) && (r.ecx & 0xffff) == 0x1002);
+    }
+}
+/* Without the legacy window, an access the hook completes is not missed. */
+static void missing_window_case(void)
+{
+    uint32_t v;
+    ctx.legacy        = NULL;
+    ctx.legacy_missed = 0;
+    reset(1);
+    before_verdict = PI_HOOK_DONE;
+    replace_before = 1;
+    before_value   = 0x55;
+    CHECK(access(0xa0010, 1, X86_READ, 0, &v) == 0 && v == 0x55 && !ctx.legacy_missed);
+    reset(1);
+    CHECK(access(0xa0010, 1, X86_READ, 0, &v) == 0 && v == 0 && ctx.legacy_missed);
+    ctx.legacy_missed = 0;
+    reset(0);
+    CHECK(access(0xa0010, 1, X86_READ, 0, &v) == 0 && v == 0 && ctx.legacy_missed);
+    ctx.legacy        = legacy;
+    ctx.legacy_missed = 0;
 }
 
 /* With a decode turned off by the ROM, the access is a master abort the
@@ -412,6 +449,7 @@ int main(void)
     config_case();
     decode_case();
     bus_error_case();
+    missing_window_case();
     printf("HOOK RESULT checks=%u failures=%u\n", checks, failures);
     return failures ? 20 : 0;
 }
