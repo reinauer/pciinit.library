@@ -268,6 +268,12 @@ check: check-hook
 build/bustrap-test: tests/bustrap.c tests/bustrap_s.S build/pciinit/bus.o build/compiler-options
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c %.S %.o,$^) -o $@
 
+# Native only, for real bus boards: what a bridge does with a PCI cycle no
+# device claims. Puts its own handler on the bus error vector; see
+# tests/abortprobe.c.
+build/abortprobe: tests/abortprobe.c tests/abortprobe_s.S build/compiler-options
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c %.S %.o,$^) -o $@
+
 build/post-test: tests/post.c build/pciinit/image.o build/pciinit/rom.o build/pciinit/context.o build/pciinit/hardware.o build/pciinit/vbe.o build/pciinit/vbe_parse.o build/pciinit/quirks.o build/pciinit/bus.o build/runtime/memory.o
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c %.o,$^) -o $@
 
