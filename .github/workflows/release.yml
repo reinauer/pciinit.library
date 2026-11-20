@@ -151,12 +151,11 @@ jobs:
   aminet:
     name: Upload to Aminet
     needs: build
-    # Aminet cannot be undrafted: a tag push only creates the draft GitHub
-    # release, and a manual run with the Aminet option uploads a checked
-    # release. Pre-release tags (v2.4-rc1) stay off Aminet.
+    # A release tag uploads to Aminet; a manual run opts in with the Aminet
+    # option. Pre-release tags (v2.4-rc1) stay off Aminet.
     if: >-
       needs.build.outputs.prerelease == 'false' &&
-      github.event_name == 'workflow_dispatch' && github.event.inputs.aminet == 'true'
+      (github.event_name == 'push' || github.event.inputs.aminet == 'true')
     runs-on: ubuntu-latest
     concurrency:
       group: aminet-release
