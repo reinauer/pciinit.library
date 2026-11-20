@@ -5,7 +5,11 @@
  * 030) or misread the frame (68040/060). A fault whose stacked PC lies in
  * the probe routines is copied to ap_frame, counted in ap_faults and
  * resumed at ap_recover through a format 0 frame, as src/pciinit/bus.S
- * does. Every other fault goes to the previous vector, ap_old.
+ * does. Every other fault goes to the previous vector, ap_old, and so do
+ * MMU faults on the 68040/060 (68040 SSW ATC bit, 68060 FSLW translation
+ * bits): the A1200 Mediators move their PCI window on an MMU access
+ * fault, which shares this vector, and MMULib must see it. On the
+ * 68020/030 the C side maps the window before the handler goes in.
  *
  * Frame sizes: $A 32, $B 92 (68020/030), $7 60 (68040), $4 16 (68060).
  */
@@ -80,9 +84,16 @@ _ap_handler:
     beq.s   .Lsize
     moveq   #60,d1
     cmp.w   #7,d0
-    beq.s   .Lsize
-    moveq   #16,d1
+    bne.s   2f
+    move.w  16+12(sp),d0            /* 68040 SSW */
+    btst    #10,d0                  /* ATC: an MMU fault, not the bus */
+    bne     .Lchain
+    bra.s   .Lsize
+2:  moveq   #16,d1
     cmp.w   #4,d0
+    bne     .Lchain
+    move.l  16+12(sp),d0            /* 68060 FSLW */
+    and.l   #0x1fc0,d0              /* PTA PTB IL PF SP WP TWE: an MMU fault */
     bne     .Lchain
 .Lsize:
     move.l  d1,_ap_frame_size
