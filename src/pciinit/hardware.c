@@ -78,8 +78,7 @@ static inline uint32_t load(unsigned routines, uint32_t address, unsigned width)
  * with its low byte first, which is a swapped 68k word or longword. A bus
  * error caught by the trap handler ends the cycle as an aborted PCI cycle
  * would (see bus.S). */
-static inline uint32_t transaction(unsigned routines, uint32_t address, unsigned width, unsigned write,
-                                   uint32_t value)
+static inline uint32_t transaction(unsigned routines, uint32_t address, unsigned width, unsigned write, uint32_t value)
 {
     if (write) {
         store(routines, address, width, swap(value, width));
@@ -664,7 +663,7 @@ uint32_t pi_bios(PCIInitContext *c, uint32_t number, struct X86Registers *r)
                 bios_status(r, 0x86);
         } else if (f >= 8 && f <= 13) {
             unsigned width = 1U << ((f - 8) % 3), write = f >= 11;
-            uint32_t value = r->ecx & (width == 1 ? 255U : width == 2 ? 65535U : 0xffffffffU);
+            uint32_t value  = r->ecx & (width == 1 ? 255U : width == 2 ? 65535U : 0xffffffffU);
             uint32_t failed = config(c, r->ebx & 65535, r->edi & 65535, width, write, &value);
             c->hook_changed = 0; /* marks traced port accesses only */
             if (failed)
@@ -773,9 +772,8 @@ uint32_t pi_hardware_scan(PCIInitContext *c, const struct X86ScanRequest *s, uin
 #else
     uint32_t i, value = 0, cpu;
     if (c->diagnostics || c->stop_bus_error || !(c->decode & PCI_COMMAND_MEMORY) || !s->count ||
-        s->stride != (int32_t)s->width ||
-        (s->width != 1 && s->width != 2 && s->width != 4) || !legacy_range(s->address, s->width) ||
-        s->width * s->count > PI_LEGACY_BYTES - (s->address - PI_LEGACY_BASE) ||
+        s->stride != (int32_t)s->width || (s->width != 1 && s->width != 2 && s->width != 4) ||
+        !legacy_range(s->address, s->width) || s->width * s->count > PI_LEGACY_BYTES - (s->address - PI_LEGACY_BASE) ||
         hooked(c, PI_SPACE_LEGACY, 0, s->address - PI_LEGACY_BASE, s->width * s->count))
         return 0;
     /* Locals, because a bus routine call would make the compiler reload
