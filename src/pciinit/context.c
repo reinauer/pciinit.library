@@ -135,7 +135,8 @@ static uint32_t X86_CALLBACK interrupt(void *user, uint32_t number, uint32_t fau
     if (vector[0] || vector[1] || vector[2] || vector[3])
         return 0;
     /* Minimal synthetic environment; a service nobody provides stops the
-     * run and is named for the caller's report. */
+     * run and is named for the caller's report. pi_bios() returns 3 when
+     * the access hook stops the run inside a PCI BIOS call. */
     if (number == 0x12) {
         r->eax  = (r->eax & 0xffff0000) | 640;
         handled = 1;

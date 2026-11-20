@@ -112,7 +112,8 @@ struct PCIInitContextInfo
  * cannot forward that range: reads returned zero and writes were dropped. */
 #define PI_WARN_NO_LEGACY_WINDOW 1UL
 /* The ROM called a BIOS service that neither it nor the library provides;
- * the run stopped there as a fault and missing_service names the call. */
+ * missing_service names the first such call. The run stopped there as a
+ * fault, or, with PII_ServiceLog, the call failed and the run went on. */
 #define PI_WARN_MISSING_SERVICE 2UL
 /* A card access ended in a 68k bus error. Reads returned all-ones and
  * writes were dropped, as for an aborted PCI cycle, and the ROM went on

@@ -13,8 +13,7 @@
  * reads and writes its first memory BAR, then does the same with I/O
  * decode off at VGA port 3CCh (miscellaneous output, read-only). Each
  * access is first made with the decode on, as a control. Interrupts are
- * off from decode off to decode on, so no other driver touches the card
- * meanwhile. A bridge that never ends the cycle freezes the machine; the
+ * off while the probe's handler is on the vector. A bridge that never ends the cycle freezes the machine; the
  * line naming the access is printed before it starts.
  *
  * AbortProbe [FORCE]   FORCE: probe even if another driver owns the card
@@ -79,16 +78,18 @@ static uint32_t access(uint32_t command, uint32_t owned, volatile void *address,
                        uint32_t value, int *faulted)
 {
     uint32_t result = 0, before;
-    Disable();
     /* With the owned decode on, one valid read maps the window first: a
      * Mediator moves it through an MMU access fault, which must reach
-     * MMULib rather than the probe's handler. */
+     * MMULib rather than the probe's handler. The command register is
+     * written outside Disable(), since an openpci provider may wait for
+     * configuration access; the card is owned, so nobody else uses it. */
     (void)*(volatile uint8_t *)address;
+    op_write(pci, board, PCI_COMMAND, command, 2);
+    Disable();
     ap_old  = *vector;
     *vector = (APTR)ap_handler;
     CacheClearU();
     before = ap_faults;
-    op_write(pci, board, PCI_COMMAND, command, 2);
     if (write && width == 1)
         ap_write8(address, value);
     else if (write && width == 2)
@@ -101,12 +102,12 @@ static uint32_t access(uint32_t command, uint32_t owned, volatile void *address,
         result = ap_read16(address);
     else
         result = ap_read32(address);
-    op_write(pci, board, PCI_COMMAND, owned, 2);
     *faulted = ap_faults != before;
     if (*vector == (APTR)ap_handler)
         *vector = ap_old;
     CacheClearU();
     Enable();
+    op_write(pci, board, PCI_COMMAND, owned, 2);
     return result;
 }
 

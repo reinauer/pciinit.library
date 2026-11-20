@@ -72,6 +72,7 @@ struct PCIInitContext
     struct PCIInitServiceLog *services;
     struct PIBusTrap trap; /* installed between pi_hardware_start and pi_hardware_finish */
     uint32_t faults_seen;  /* trap.faults already turned into a stop */
+    uint8_t trap_installed;
 };
 struct PIOptions
 {

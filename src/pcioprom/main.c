@@ -4,6 +4,7 @@
 #include <proto/pciinit.h>
 #include "private/openpci_calls.h"
 #include <stdio.h>
+#include <stddef.h>
 #include <string.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -202,7 +203,11 @@ static int report(PCIInitContext *ctx, const struct PCIInitDiagnostics *diag)
 {
     struct PCIInitContextInfo ci = {.size = sizeof(ci)};
     unsigned n, start, missed = 0;
-    GetPCIContextInfo(ctx, &ci);
+    /* A 2.3 library takes only the structure without the bus error fields. */
+    if (GetPCIContextInfo(ctx, &ci) != PI_OK) {
+        ci.size = offsetof(struct PCIInitContextInfo, bus_errors);
+        GetPCIContextInfo(ctx, &ci);
+    }
     if (ci.warnings & PI_WARN_NO_LEGACY_WINDOW) {
         puts("  WARNING: the ROM accessed legacy VGA memory (PCI 0xA0000-0xBFFFF),");
         puts("  which this PCI bus board cannot forward; reads returned zero and");
