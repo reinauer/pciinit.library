@@ -123,10 +123,10 @@ static void reset(int hooked)
     before_verdict = after_verdict = PI_HOOK_PASS;
     replace_before = replace_after = 0;
     ctx.hook                       = hooked ? &hook : NULL;
-    ctx.detour                     = hooked;
     ctx.decode                     = PCI_COMMAND_IO | PCI_COMMAND_MEMORY;
     ctx.range_count                = 0;
     ctx.stop_bus_error             = 0;
+    pi_hardware_flags(&ctx);
     ctx.trap.faults = ctx.faults_seen = 0;
     diag.count                        = 0;
     memset(seen, 0, sizeof(seen));
@@ -266,8 +266,20 @@ static void fast_path_case(void)
     /* So does strict bus-error mode. */
     reset(0);
     ctx.stop_bus_error = 1;
+    pi_hardware_flags(&ctx);
     CHECK(pi_hardware_bulk(&ctx, &copy, source) == 0);
     CHECK(pi_hardware_scan(&ctx, &scan, &last) == 0);
+    /* Without the window every element reads zero. */
+    reset(0);
+    {
+        struct X86ScanRequest zeros = {sizeof(zeros), 0xa0000, 4, 8, 0, 1, 4};
+        APTR window                 = ctx.legacy;
+        ctx.legacy                  = NULL;
+        ctx.legacy_missed           = 0;
+        last                        = 1;
+        CHECK(pi_hardware_scan(&ctx, &zeros, &last) == 8 && last == 0 && ctx.legacy_missed);
+        ctx.legacy = window;
+    }
     ctx.diagnostics = d0;
 }
 
@@ -324,14 +336,15 @@ static void decode_case(void)
     CHECK(access(0xa0010, 2, X86_READ, 0, &v) == 0 && v == 0x1234);
     /* The hook still sees the access first and may complete it. */
     reset(1);
-    ctx.decode     = PCI_COMMAND_MEMORY;
+    ctx.decode = PCI_COMMAND_MEMORY;
+    pi_hardware_flags(&ctx);
     before_verdict = PI_HOOK_DONE;
     replace_before = 1;
     before_value   = 0x42;
     CHECK(access(0x8180, 1, X86_IN, 0, &v) == 0 && v == 0x42 && calls == 1);
     reset(0);
     ctx.decode = 0;
-    ctx.detour = 1;
+    pi_hardware_flags(&ctx);
     CHECK(access(0xcfc, 2, X86_OUT, PCI_COMMAND_IO | PCI_COMMAND_MEMORY, NULL) == 0 && !ctx.detour);
 }
 
@@ -343,6 +356,7 @@ static void bus_error_case(void)
     ctx.trap.faults = 1;
     CHECK(access(0x8180, 1, X86_IN, 0, &v) == 0);
     ctx.stop_bus_error = 1;
+    pi_hardware_flags(&ctx);
     CHECK(access(0x8180, 1, X86_IN, 0, &v) == 1 && ctx.faults_seen == 1);
     CHECK(access(0x8180, 1, X86_IN, 0, &v) == 0);
 }

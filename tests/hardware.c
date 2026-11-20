@@ -49,9 +49,11 @@ static void master_abort_case(PCIInitContext *c, struct Library *pci, struct pci
            (ULONG)c->trap.address, (ULONG)c->bars[0].cpu);
     c->faults_seen    = c->trap.faults;
     c->stop_bus_error = 1;
+    pi_hardware_flags(c);
     v                 = 1;
     CHECK(pi_hardware_access(c, c->bars[0].bus, 2, X86_READ, &v) == caught && (v & 0xffff) == (expected & 0xffff));
     c->stop_bus_error = 0;
+    pi_hardware_flags(c);
     op_write(pci, board, PCI_COMMAND, owned, 2);
     CHECK(pi_hardware_access(c, c->bars[0].bus, 4, X86_READ, &v) == 0);
     /* Turned off by the ROM's own configuration write, the decode is

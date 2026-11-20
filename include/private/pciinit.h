@@ -63,7 +63,8 @@ struct PCIInitContext
     uint8_t stop_bus_error;
     uint8_t bus_routines; /* card accesses use the trap-safe bus.S routines (68040/060) */
     uint8_t decode;       /* PCI_COMMAND I/O and memory decode as the ROM last set them */
-    uint8_t detour;       /* card accesses take detour_card(): a hook is set or a decode is off */
+    uint8_t detour;       /* card accesses leave the inline path: hook, bus routines or a decode off */
+    uint8_t watch;        /* accesses end with the stop and hook checks: hook or stop_bus_error */
     uint8_t hook_changed; /* the hook changed or completed the current access */
     uint8_t range_count;  /* 0: the hook sees every card access */
     struct Hook *hook;
@@ -94,6 +95,7 @@ uint32_t pi_hardware_scan(PCIInitContext *, const struct X86ScanRequest *, uint3
 uint32_t pi_hardware_bulk(PCIInitContext *, const struct X86BulkRequest *, const uint8_t *);
 uint32_t pi_hardware_start(PCIInitContext *);
 void pi_hardware_finish(PCIInitContext *);
+void pi_hardware_flags(PCIInitContext *); /* after changing hook, bus_routines, decode or stop_bus_error */
 uint32_t pi_hardware_access(PCIInitContext *, uint32_t, uint32_t, uint32_t, uint32_t *);
 uint32_t pi_bios(PCIInitContext *, uint32_t, struct X86Registers *);
 uint32_t pi_int10(struct PIBase *, PCIInitContext *, struct X86Registers *);
