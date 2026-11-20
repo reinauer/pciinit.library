@@ -55,6 +55,9 @@ uint32_t pi_options(const struct TagItem *tags, struct PIOptions *opts)
         case PII_StopOnBusError:
             opts->stop_bus_error = data;
             break;
+        case PII_ReleaseVGA:
+            opts->release_vga = data;
+            break;
         default:
             return PI_BAD_ARGUMENT;
         }

@@ -120,9 +120,10 @@ int main(int argc, char **argv)
         goto out;
     if (OpenDevice((STRPTR)TIMERNAME, UNIT_MICROHZ, (struct IORequest *)timer, 0))
         goto out;
-    opened      = 1;
-    TimerBase   = timer->tr_node.io_Device;
-    base.sys    = SysBase;
+    opened    = 1;
+    TimerBase = timer->tr_node.io_Device;
+    base.sys  = SysBase;
+    InitSemaphore(&base.vga_lock);
     base.engine = OpenLibrary((STRPTR) "x86emu.library", 3);
     if (!base.engine || !(pci = op_open(SysBase)))
         goto out;

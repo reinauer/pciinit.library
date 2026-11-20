@@ -31,7 +31,7 @@ static const char *status_name(uint32_t status)
                                         "unsupported graphics mode"};
     return status < sizeof(names) / sizeof(names[0]) ? names[status] : "unknown status";
 }
-static int list_modes, pattern, no_post, trace_accesses, log_services;
+static int list_modes, pattern, no_post, trace_accesses, log_services, release_vga;
 static uint32_t service_entries[32];
 static struct PCIInitServiceLog services = {sizeof(services), 32, 0, service_entries};
 static uint32_t modes[16];
@@ -51,6 +51,8 @@ static int arguments(int argc, char **argv)
             trace_accesses = 1;
         else if (!strcmp(argv[i], "--services"))
             log_services = 1;
+        else if (!strcmp(argv[i], "--release-vga"))
+            release_vga = 1;
         else if (!strcmp(argv[i], "--config")) {
             if (++i == argc || config_path)
                 return 0;
@@ -196,6 +198,18 @@ static uint32_t graphics(PCIInitContext *ctx)
         printf("  CURRENT %04lx\n", (ULONG)current);
     return status;
 }
+/* What the ROM reached since POST started: drivers can tell whether the
+ * card needs the bus board's I/O window and legacy VGA after POST. */
+static void legacy_line(PCIInitContext *ctx, const char *when)
+{
+    struct PCIInitContextInfo ci = {.size = sizeof(ci)};
+    if (GetPCIContextInfo(ctx, &ci))
+        return;
+    printf("  LEGACY%s: VGA ports %s, other I/O ports %s, VGA memory %s\n", when,
+           ci.legacy_used & PI_USED_VGA_PORTS ? "used" : "unused",
+           ci.legacy_used & PI_USED_IO_PORTS ? "used" : "unused",
+           ci.legacy_used & PI_USED_VGA_MEMORY ? "used" : "unused");
+}
 /* Execution result, final registers and, with --trace, the retained access
  * trace of the last ROM run or BIOS call; returns whether the legacy window
  * was missed. Without --trace the diagnostics record no entries. */
@@ -218,6 +232,14 @@ static int report(PCIInitContext *ctx, const struct PCIInitDiagnostics *diag)
     printf("  CPU stop=%lu instructions=%lu accesses=%lu fault=%08lx op=%lu INT=%lu\n", (ULONG)ci.execution.reason,
            (ULONG)ci.execution.instructions, (ULONG)ci.execution.accesses, (ULONG)ci.execution.address,
            (ULONG)ci.execution.operation, (ULONG)ci.execution.interrupt);
+    if (ci.warnings & PI_WARN_NO_IO_WINDOW)
+        puts(
+            "  WARNING: the ROM accessed I/O ports, which this PCI bus board cannot\n"
+            "  forward; reads returned all-ones and writes were dropped.");
+    if (ci.blocking_card != PI_NO_BLOCKING_CARD)
+        printf("  BLOCKED: the display controller at %lu:%lu.%lu decodes the VGA ports\n",
+               (ULONG)(ci.blocking_card >> 8), (ULONG)((ci.blocking_card >> 3) & 31), (ULONG)(ci.blocking_card & 7));
+    legacy_line(ctx, "");
     if (ci.warnings & PI_WARN_BUS_ERROR)
         printf(
             "  WARNING: %lu card access(es) ended in a 68k bus error, the first at %08lx;\n"
@@ -272,17 +294,22 @@ static __attribute__((noinline)) int run_main(int argc, char **argv)
     struct PCIInitTraceEntry trace[128];
     struct PCIInitDiagnostics diag = {.size = sizeof(diag)};
     struct X86Limits limits        = {sizeof(limits), 10000000, 30000000, 300000, NULL};
-    struct TagItem context_tags[]  = {{PII_Error, (ULONG)&status},     {PII_Hardware, 1},
-                                      {PII_Diagnostics, (ULONG)&diag}, {PII_Limits, (ULONG)&limits},
-                                      {TAG_IGNORE, (ULONG)&services},  {TAG_DONE, 0}};
+    struct TagItem context_tags[]  = {{PII_Error, (ULONG)&status},
+                                      {PII_Hardware, 1},
+                                      {PII_Diagnostics, (ULONG)&diag},
+                                      {PII_Limits, (ULONG)&limits},
+                                      {TAG_IGNORE, (ULONG)&services},
+                                      {TAG_IGNORE, 1},
+                                      {TAG_DONE, 0}};
     if (!arguments(argc, argv)) {
         puts(
             "Usage: PCIoprom [--no-post | --list-modes] [--mode number ...] [--pattern] [--trace] [--services] "
-            "[--config file] [--dump file] [ROM-file]");
+            "[--release-vga] [--config file] [--dump file] [ROM-file]");
         puts("Modes accept decimal or 0x-prefixed hex; --pattern requires --mode.");
         puts("--dump writes the first card ROM, as read from the card, to file.");
         puts("--trace lists the last 128 I/O, VGA, BAR and interrupt accesses after each run.");
         puts("--services lets missing BIOS services fail instead of stopping, and lists them.");
+        puts("--release-vga leaves each card with VGA ports and memory decode off after use.");
         puts("Direct-color modes show a Boing Ball by default; --pattern draws test bars.");
         puts("ENV:/ENVARC:" OPROM_CONFIG_NAME " holds 'Ignore vendor:device' lines (device may be *).");
         return 20;
@@ -293,6 +320,8 @@ static __attribute__((noinline)) int run_main(int argc, char **argv)
     }
     if (log_services)
         context_tags[4].ti_Tag = PII_ServiceLog;
+    if (release_vga)
+        context_tags[5].ti_Tag = PII_ReleaseVGA;
     PCIInitBase = OpenLibrary((STRPTR) "pciinit.library", PCIINIT_LIBRARY_VERSION);
     if (!PCIInitBase) {
         puts("Cannot open pciinit.library 2");
@@ -380,6 +409,8 @@ static __attribute__((noinline)) int run_main(int argc, char **argv)
             if (status == PI_OK) {
                 ++initialized;
                 status = graphics(ctx);
+                if (!status && (list_modes || mode_count))
+                    legacy_line(ctx, " after BIOS calls");
                 if (status) {
                     printf("  Graphics: %s\n", status_name(status));
                     ++failed;

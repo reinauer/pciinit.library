@@ -61,6 +61,7 @@ static APTR lib_init(REG(struct PIBase *, base, d0), REG(BPTR, segment, a0), REG
 #endif
     base->library.lib_IdString = (STRPTR)lib_ident;
 #ifdef PCIINIT_LIBRARY
+    InitSemaphore(&base->vga_lock);
     base->engine = OpenLibrary((STRPTR) "x86emu.library", X86EMU_VERSION);
     if (!base->engine) {
         free_base(base);

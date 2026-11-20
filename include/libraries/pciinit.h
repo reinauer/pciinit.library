@@ -42,6 +42,7 @@ enum PCIInitState
 #define PII_AccessRanges   (0x80005008UL) /* const struct PCIInitAccessRange *: hook only these; copied */
 #define PII_ServiceLog     (0x80005009UL) /* struct PCIInitServiceLog *: missing BIOS services fail and are logged */
 #define PII_StopOnBusError (0x8000500AUL) /* nonzero: a 68k bus error on a card access stops the run */
+#define PII_ReleaseVGA     (0x8000500BUL) /* nonzero: the card gives up legacy VGA between calls */
 
 /* Card address spaces as an access hook sees them. Offsets are ports for
  * I/O, from A0000 for the legacy window, from the BAR's start for memory
@@ -107,7 +108,15 @@ struct PCIInitContextInfo
     /* Since 2.4; GetPCIContextInfo() also accepts the size without these. */
     uint32_t bus_errors;        /* 68k bus errors on card accesses since POST started */
     uint32_t bus_error_address; /* Amiga address of the first one */
+    uint32_t blocking_card;     /* bus<<8 | device<<3 | function of the display controller decoding VGA
+                                   I/O when the last call returned PI_UNSUPPORTED_MAPPING for it, or
+                                   PI_NO_BLOCKING_CARD */
+    uint32_t legacy_used;       /* PI_USED_* bits: what the ROM reached since POST started */
 };
+#define PI_NO_BLOCKING_CARD 0xffffffffUL
+#define PI_USED_VGA_PORTS   1UL /* ports 3B0-3DF */
+#define PI_USED_IO_PORTS    2UL /* other ports on the PCI bus, e.g. the card's I/O BAR */
+#define PI_USED_VGA_MEMORY  4UL /* memory A0000-BFFFF */
 /* The ROM accessed legacy VGA memory (A0000-BFFFF) and the PCI bus board
  * cannot forward that range: reads returned zero and writes were dropped. */
 #define PI_WARN_NO_LEGACY_WINDOW 1UL
@@ -118,7 +127,10 @@ struct PCIInitContextInfo
 /* A card access ended in a 68k bus error. Reads returned all-ones and
  * writes were dropped, as for an aborted PCI cycle, and the ROM went on
  * unless PII_StopOnBusError was set. */
-#define PI_WARN_BUS_ERROR       4UL
+#define PI_WARN_BUS_ERROR 4UL
+/* The ROM accessed an I/O port and the PCI bus board has no I/O window:
+ * reads returned all-ones and writes were dropped. */
+#define PI_WARN_NO_IO_WINDOW    8UL
 #define PCIINIT_LIBRARY_VERSION 2 /* pciinit.library version to pass to OpenLibrary() */
 #define PI_VBE_MAX_MODES        256
 #define PI_VBE_LINEAR           0x4000UL

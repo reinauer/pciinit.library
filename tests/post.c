@@ -26,7 +26,8 @@ int main(void)
     struct X86Limits limits     = {sizeof(limits), 100000, 1000000, 10000, NULL};
     struct X86Result result     = {.size = sizeof(result)};
     unsigned i, column = 0, row = 0;
-    base.sys    = SysBase;
+    base.sys = SysBase;
+    InitSemaphore(&base.vga_lock);
     base.engine = OpenLibrary((STRPTR) "x86emu.library", 1);
     CHECK(base.engine != NULL);
     if (!base.engine)

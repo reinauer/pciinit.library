@@ -63,10 +63,18 @@ struct PCIInitContext
     uint8_t stop_bus_error;
     uint8_t bus_routines; /* card accesses use the trap-safe bus.S routines (68040/060) */
     uint8_t decode;       /* PCI_COMMAND I/O and memory decode as the ROM last set them */
-    uint8_t detour;       /* card accesses leave the inline path: hook, bus routines or a decode off */
+    uint8_t detour;       /* card accesses leave the inline path: hook, bus routines, no I/O window or a decode off */
     uint8_t watch;        /* accesses end with the stop and hook checks: hook or stop_bus_error */
     uint8_t hook_changed; /* the hook changed or completed the current access */
     uint8_t range_count;  /* 0: the hook sees every card access */
+    uint8_t release_vga;  /* PII_ReleaseVGA: I/O decode and VGA RAM enable off between calls */
+    uint8_t vga;          /* the card is VGA compatible: it has a Miscellaneous Output register */
+    uint8_t misc_saved;   /* misc holds the Miscellaneous Output value from before VGA was taken away */
+    uint8_t misc;
+    uint8_t vga_locked;   /* pi_hardware_start holds the base's vga_lock */
+    uint8_t vga_obtained; /* ObtainLegacyVGA nesting count */
+    uint8_t io_missed;    /* the ROM used a port while the bus board had no I/O window */
+    uint8_t used[3];      /* this call reached VGA ports, other ports, VGA memory; see pi_hardware_used */
     struct Hook *hook;
     struct PCIInitAccessRange ranges[PI_MAX_ACCESS_RANGES];
     struct PCIInitServiceLog *services;
@@ -77,7 +85,7 @@ struct PCIInitContext
 struct PIOptions
 {
     uint32_t *error;
-    uint32_t offline, hardware, quirks, stop_bus_error, range_count;
+    uint32_t offline, hardware, quirks, stop_bus_error, release_vga, range_count;
     struct PCIInitDiagnostics *diagnostics;
     const struct X86Limits *limits;
     struct Hook *hook;
@@ -96,9 +104,13 @@ uint32_t pi_hardware_scan(PCIInitContext *, const struct X86ScanRequest *, uint3
 uint32_t pi_hardware_bulk(PCIInitContext *, const struct X86BulkRequest *, const uint8_t *);
 uint32_t pi_hardware_start(PCIInitContext *);
 void pi_hardware_finish(PCIInitContext *);
-void pi_hardware_flags(PCIInitContext *); /* after changing hook, bus_routines, decode or stop_bus_error */
+uint32_t pi_hardware_used(const PCIInitContext *); /* used[] as PI_USED_* bits */
+void pi_hardware_flags(PCIInitContext *);          /* after changing hook, bus_routines, io, decode or stop_bus_error */
 uint32_t pi_hardware_access(PCIInitContext *, uint32_t, uint32_t, uint32_t, uint32_t *);
 uint32_t pi_bios(PCIInitContext *, uint32_t, struct X86Registers *);
+uint32_t pi_vga_obtain(struct PIBase *, PCIInitContext *);
+uint32_t pi_vga_release(struct PIBase *, PCIInitContext *);
+void pi_vga_forget(PCIInitContext *);
 uint32_t pi_int10(struct PIBase *, PCIInitContext *, struct X86Registers *);
 uint32_t pi_vbe_info(struct PIBase *, PCIInitContext *, struct PCIInitVBEInfo *);
 uint32_t pi_vbe_mode_info(struct PIBase *, PCIInitContext *, uint32_t, struct PCIInitVBEModeInfo *);

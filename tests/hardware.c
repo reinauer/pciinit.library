@@ -192,6 +192,83 @@ static void legacy_case(PCIInitContext *c)
     wr(c, 0x3c4, 2, seq2);
     wr(c, 0x3c4, 4, seq4);
 }
+/* The VGA arbiter on the one fixture card. PII_ReleaseVGA gives up VGA
+ * memory and ports after a call and returns them at the next; an
+ * explicit ObtainLegacyVGA keeps them across calls; VGA moves from
+ * another context's card, unless that context holds ObtainLegacyVGA,
+ * which then blocks the call by name. The other context is a stand-in
+ * on the same card. */
+static void vga_case(PCIInitContext *c, struct Library *pci, struct pci_dev *board, uint32_t command)
+{
+    struct PIBase *base  = c->owner;
+    PCIInitContext other = {0};
+    uint32_t v, misc, on = (command | 3) & ~PCI_COMMAND_MASTER;
+    volatile uint8_t *io;
+    c->hardware    = 1;
+    c->release_vga = 1;
+    op_write(pci, board, PCI_COMMAND, on, 2);
+    CHECK(pi_hardware_start(c) == PI_OK);
+    if (failures)
+        return;
+    CHECK(base->vga_holder == c);
+    io = (volatile uint8_t *)c->io;
+    v  = 0;
+    CHECK(pi_hardware_access(c, 0x3cc, 1, X86_IN, &v) == 0);
+    misc = v | 2;
+    v    = misc;
+    CHECK(pi_hardware_access(c, 0x3c2, 1, X86_OUT, &v) == 0);
+    CHECK(pi_hardware_used(c) & PI_USED_VGA_PORTS);
+    pi_hardware_finish(c);
+    CHECK(base->vga_holder == NULL && c->misc_saved && c->misc == misc && !c->vga_locked);
+    CHECK(op_read(pci, board, PCI_COMMAND, 2) == (on & ~PCI_COMMAND_IO));
+    op_write(pci, board, PCI_COMMAND, on, 2);
+    CHECK(io[0x3cc] == (misc & ~2U));
+    op_write(pci, board, PCI_COMMAND, on & ~PCI_COMMAND_IO, 2);
+    CHECK(pi_hardware_start(c) == PI_OK);
+    v = 0;
+    CHECK(pi_hardware_access(c, 0x3cc, 1, X86_IN, &v) == 0 && v == misc && !c->misc_saved);
+    pi_hardware_finish(c);
+    printf("HARDWARE release vga misc=%02lx command=%04lx\n", (ULONG)misc, (ULONG)op_read(pci, board, PCI_COMMAND, 2));
+    /* Obtained, the card keeps VGA through calls until released. */
+    CHECK(pi_vga_obtain(base, c) == PI_OK && base->vga_holder == c);
+    CHECK((op_read(pci, board, PCI_COMMAND, 2) & 3) == 3 && io[0x3cc] == misc);
+    CHECK(pi_hardware_start(c) == PI_OK);
+    pi_hardware_finish(c);
+    CHECK(op_read(pci, board, PCI_COMMAND, 2) & PCI_COMMAND_IO);
+    CHECK(pi_vga_obtain(base, c) == PI_OK && c->vga_obtained == 2);
+    CHECK(pi_vga_release(base, c) == PI_OK && (op_read(pci, board, PCI_COMMAND, 2) & PCI_COMMAND_IO));
+    CHECK(pi_vga_release(base, c) == PI_OK && !(op_read(pci, board, PCI_COMMAND, 2) & PCI_COMMAND_IO));
+    CHECK(base->vga_holder == NULL && c->misc_saved && c->misc == misc);
+    CHECK(pi_vga_release(base, c) == PI_BAD_STATE);
+    /* VGA moves from another context's card. */
+    c->release_vga   = 0;
+    other.owner      = base;
+    other.pci        = pci;
+    other.board      = board;
+    other.io         = c->io;
+    other.vga        = 1;
+    other.bdf        = 0x1234;
+    base->vga_holder = &other;
+    c->misc_saved    = 0;
+    op_write(pci, board, PCI_COMMAND, on, 2);
+    io[0x3c2] = misc;
+    CHECK(pi_hardware_start(c) == PI_OK);
+    CHECK(base->vga_holder == c && other.misc_saved && other.misc == misc);
+    v = 0;
+    CHECK(pi_hardware_access(c, 0x3cc, 1, X86_IN, &v) == 0 && v == (misc & ~2U));
+    v = misc;
+    CHECK(pi_hardware_access(c, 0x3c2, 1, X86_OUT, &v) == 0);
+    pi_hardware_finish(c);
+    /* ... but not from one that holds ObtainLegacyVGA. */
+    other.vga_obtained = 1;
+    base->vga_holder   = &other;
+    CHECK(pi_hardware_start(c) == PI_UNSUPPORTED_MAPPING && c->info.blocking_card == 0x1234 && !c->vga_locked);
+    CHECK(pi_vga_obtain(base, c) == PI_UNSUPPORTED_MAPPING && c->vga_obtained == 0);
+    base->vga_holder = NULL;
+    CHECK(pi_hardware_start(c) == PI_OK && c->info.blocking_card == PI_NO_BLOCKING_CARD);
+    pi_hardware_finish(c);
+    op_write(pci, board, PCI_COMMAND, command, 2);
+}
 #ifdef __mc68000__
 __attribute__((stkparm))
 #endif
@@ -217,7 +294,8 @@ int main(int argc, char **argv)
     CHECK(op_obtain(pci, board));
     if (failures)
         goto out;
-    base.sys      = SysBase;
+    base.sys = SysBase;
+    InitSemaphore(&base.vga_lock);
     c.owner       = &base;
     c.pci         = pci;
     c.board       = board;
@@ -421,6 +499,7 @@ int main(int argc, char **argv)
     CHECK(!(c.info.warnings & PI_WARN_NO_LEGACY_WINDOW));
     pi_hardware_finish(&c);
     CHECK(c.info.warnings & PI_WARN_NO_LEGACY_WINDOW);
+    vga_case(&c, pci, board, command);
 release:
     op_release(pci, board);
 out:

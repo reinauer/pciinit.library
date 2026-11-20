@@ -98,6 +98,17 @@ static inline uint32_t ReadFramebuffer(PCIInitContext *ctx, uint32_t offset, voi
                            PREG(uint32_t, n, d1), PREG(struct Library *, b, a6));
     return PVEC(120, fn)(ctx, offset, destination, bytes, PCIInitBase);
 }
+/* The bus-wide VGA arbiter: legacy VGA ports and memory for the caller. */
+static inline uint32_t ObtainLegacyVGA(PCIInitContext *ctx)
+{
+    typedef uint32_t (*fn)(PREG(PCIInitContext *, c, a0), PREG(struct Library *, b, a6));
+    return PVEC(126, fn)(ctx, PCIInitBase);
+}
+static inline uint32_t ReleaseLegacyVGA(PCIInitContext *ctx)
+{
+    typedef uint32_t (*fn)(PREG(PCIInitContext *, c, a0), PREG(struct Library *, b, a6));
+    return PVEC(132, fn)(ctx, PCIInitBase);
+}
 #undef PREG
 #undef PVEC
 #endif

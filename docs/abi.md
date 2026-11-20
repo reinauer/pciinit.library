@@ -86,6 +86,8 @@ single-stepping use the scalar path.
 | `UnmapFramebuffer(ctx)` | Release it |
 | `WriteFramebuffer(ctx, offset, source, bytes)` | Copy pixels into a banked mode |
 | `ReadFramebuffer(ctx, offset, destination, bytes)` | Read them back |
+| `ObtainLegacyVGA(ctx)` | Give the card legacy VGA ports and memory until released (2.4) |
+| `ReleaseLegacyVGA(ctx)` | End it |
 
 Open the library with `PCIINIT_LIBRARY_VERSION`. Calls return
 `enum PCIInitStatus`. Calls returning a pointer report their
@@ -113,12 +115,17 @@ modified.
 A card context owns its card until deletion; loading that card's ROM or
 creating another context for it returns `PI_CARD_BUSY`. OpenPCI must open
 at version 14 and provide vectors through `ReleasePCIRegion`. Running the
-ROM on the card needs `PII_Hardware=1`. `RunOptionROM()` returns
-`PI_UNSUPPORTED_MAPPING` before anything runs if that tag is missing, the
-bus board has no legacy I/O window, or another display controller already
-decodes VGA I/O. Bus mastering is turned off while the
-ROM runs and the original command word is restored afterwards. POST changes
-VGA registers and VRAM; a failure does not undo that.
+ROM on the card needs `PII_Hardware=1`; without it a card context can
+load and inspect ROMs, but nothing reaches the card and `RunOptionROM()`
+returns `PI_UNSUPPORTED_MAPPING`. It returns the same before anything runs
+when the legacy VGA range cannot be given to the card (see below). Bus
+mastering is turned off while the ROM runs and the original command word
+is restored afterwards. POST changes VGA registers and VRAM; a failure
+does not undo that.
+
+A bus board without an I/O window does not stop the ROM: its port
+accesses read all-ones, writes are dropped, and the run is flagged with
+`PI_WARN_NO_IO_WINDOW`.
 
 `PII_Offline=1` with a NULL board creates a context with RAM and ROM shadow
 only; every port and VGA access fails.
@@ -144,6 +151,8 @@ BIOS calls after it:
   (with `PII_ServiceLog` the call fails and the run goes on) and
   `missing_service` holds the vector in the upper half and AX in the
   lower half, e.g. INT 15h AX=F965h.
+- `PI_WARN_NO_IO_WINDOW`: the bus board has no PCI I/O window and the ROM
+  accessed a port. Reads returned all-ones and writes were dropped.
 - `PI_WARN_BUS_ERROR`: a card access ended in a 68k bus error. The library
   treats it as an aborted PCI cycle: the read returned all-ones, the write
   was dropped, and a bulk transfer stopped at that element. `bus_errors`
@@ -152,8 +161,52 @@ BIOS calls after it:
   run as an access fault instead, and string transfers to the legacy window
   run element by element so the fault names the instruction.
 
+`legacy_used` collects `PI_USED_*` bits for what the ROM reached since
+POST started, over POST and the BIOS calls after it:
+`PI_USED_VGA_PORTS` (`3B0-3DF`), `PI_USED_IO_PORTS` (any other port on
+the PCI bus, such as the card's I/O BAR) and `PI_USED_VGA_MEMORY`
+(`A0000-BFFFF`). A driver can tell from it whether the card needs the
+bus board's I/O window, and legacy VGA after POST; `PCIoprom` prints it.
+
 `GetPCIContextInfo()` also accepts the 2.3 structure size, which ends
 before `bus_errors`, and fills only that much.
+
+### Legacy VGA
+
+VGA ports `3B0-3DF` and memory `A0000-BFFFF` exist once on the bus, and
+every VGA card answers them while its I/O decode, or its memory decode and
+VGA RAM Enable (bit 1 of the Miscellaneous Output register), is on. The
+library arbitrates them between contexts. POST and every BIOS call give
+them to their card: when the card of another context last had them, the
+library first saves that card's Miscellaneous Output value, clears RAM
+Enable and turns its I/O decode off, and gives the value back at the start
+of that context's next call. The other card's BARs, framebuffer and
+picture are unaffected; its registers stay reachable through memory BARs.
+A call returns `PI_UNSUPPORTED_MAPPING` instead when another display
+controller that no context knows decodes I/O, or when another context
+holds `ObtainLegacyVGA()`; `blocking_card` in `PCIInitContextInfo` then
+names that card as bus<<8 | device<<3 | function, and is
+`PI_NO_BLOCKING_CARD` otherwise. A deleted context's card keeps what it
+last had and becomes unknown to the arbiter. The library sees a VGA memory
+decode only through the I/O decode, so a card no context knows that leaves
+RAM Enable on with I/O off is not noticed.
+
+With `PII_ReleaseVGA=1` the card gives legacy VGA up at the end of each
+call instead of keeping it until another context needs it: RAM Enable and
+I/O decode are off between calls, so several cards can take turns, and a
+driver that only uses memory BARs after POST needs nothing else. Without
+it the card keeps its decode after a call, as before 2.4.
+
+`ObtainLegacyVGA()` gives the card legacy VGA for a driver that drives
+VGA registers itself: I/O and memory decode on, RAM Enable restored. It
+nests, holds a semaphore other tasks' calls wait for until the matching
+`ReleaseLegacyVGA()`, which must come from the same task, and keeps the
+card's decode across POST and BIOS calls meanwhile. The last release
+turns VGA off again if the context has `PII_ReleaseVGA`. It returns
+`PI_BAD_STATE` for a context without `PII_Hardware` or a card, during
+another context's framebuffer mapping, and from `DeletePCIContext()` while
+held; `PI_UNSUPPORTED_MAPPING` without an I/O window or when blocked as
+above.
 
 Bus errors are caught by installing a trap handler as the calling task's
 `tc_TrapCode` while POST or a BIOS call runs. It handles access faults

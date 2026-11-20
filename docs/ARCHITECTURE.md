@@ -325,6 +325,21 @@ There is one generic transport and no per-card alternative: legacy VGA
 memory accesses reach the card with their planar, chain-4 and text-mode
 semantics intact, independently of BAR access.
 
+### Sharing legacy VGA between cards
+
+The VGA ports and `0xA0000-0xBFFFF` exist once on the bus, so two VGA
+cards cannot both decode them. The library arbitrates, much like the
+Linux VGA arbiter: a semaphore in the library base is held for each call
+that runs a ROM, and the base records which context's card had legacy VGA
+last. A call on another card first takes it away from that one, by
+clearing VGA RAM Enable in its Miscellaneous Output register and its PCI
+I/O decode, and gives the saved value back at that card's next call. The
+cards' BARs stay decoded, so a driver that reaches its card through
+memory-mapped registers keeps working. `PII_ReleaseVGA` releases the range
+after every call, and `ObtainLegacyVGA()`/`ReleaseLegacyVGA()` hold it for
+a driver that drives VGA registers itself. A display controller no context
+knows that decodes I/O blocks a call, which then names it.
+
 ## Graphics interface
 
 The library provides controller and mode queries, mode setting and
@@ -365,6 +380,7 @@ PCIoprom path:card-rom.bin
 PCIoprom --no-post
 PCIoprom --no-post --dump ram:card.rom
 PCIoprom --list-modes
+PCIoprom --release-vga
 PCIoprom --mode 0x111 --pattern
 PCIoprom --mode 0x111 --mode 0x114 --mode 0x111 --pattern
 ```
@@ -375,6 +391,11 @@ the result. `--no-post` stops after the loader and preflight checks, and
 A ROM file is matched to a card by PCI vendor and device. `--trace` lists
 the last accesses of each run, and `--services` lists BIOS services the
 ROM called that nobody provides, letting them fail instead of stopping.
+After each POST a `LEGACY` line says whether the ROM used the VGA ports,
+other I/O ports and VGA memory, repeated after mode calls; a driver can
+tell from it whether its card needs the bus board's I/O window or legacy
+VGA after POST. `--release-vga` creates the contexts with
+`PII_ReleaseVGA`, leaving each card without legacy VGA decode afterwards.
 
 Mode options initialize a context and run every operation within that
 invocation. Direct-color modes show a centered red-and-white Boing Ball on

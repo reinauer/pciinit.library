@@ -194,7 +194,7 @@ static void access_argument_case(void)
 static void context_info_size_case(void)
 {
     struct PCIInitContextInfo info = {.size = sizeof(info) - sizeof(uint32_t)};
-    struct TagItem tags[]          = {{PII_Offline, 1}, {TAG_DONE, 0}};
+    struct TagItem tags[]          = {{PII_Offline, 1}, {TAG_DONE, 0}, {TAG_DONE, 0}};
     PCIInitContext *ctx            = CreatePCIContext(NULL, tags);
     CHECK(ctx != NULL);
     if (!ctx)
@@ -203,12 +203,23 @@ static void context_info_size_case(void)
     info.size = sizeof(info);
     CHECK(GetPCIContextInfo(ctx, &info) == PI_OK);
     CHECK(info.size == sizeof(info) && info.state == PI_CREATED && info.offline == 1 && info.warnings == 0);
+    CHECK(info.blocking_card == PI_NO_BLOCKING_CARD && info.legacy_used == 0);
+    /* The VGA arbiter serves cards; an offline context has none. */
+    CHECK(ObtainLegacyVGA(ctx) == PI_BAD_STATE);
+    CHECK(ReleaseLegacyVGA(ctx) == PI_BAD_STATE);
+    CHECK(ObtainLegacyVGA(NULL) == PI_BAD_ARGUMENT && ReleaseLegacyVGA(NULL) == PI_BAD_ARGUMENT);
     memset(&info, 0xaa, sizeof(info));
     info.size = offsetof(struct PCIInitContextInfo, bus_errors);
     CHECK(GetPCIContextInfo(ctx, &info) == PI_OK);
     CHECK(info.size == offsetof(struct PCIInitContextInfo, bus_errors) && info.state == PI_CREATED);
     CHECK(info.bus_errors == 0xaaaaaaaaU && info.bus_error_address == 0xaaaaaaaaU);
     CHECK(DeletePCIContext(ctx) == PI_OK);
+    tags[0] = (struct TagItem){PII_ReleaseVGA, 1};
+    tags[1] = (struct TagItem){PII_Offline, 1};
+    ctx     = CreatePCIContext(NULL, tags);
+    CHECK(ctx != NULL);
+    if (ctx)
+        CHECK(DeletePCIContext(ctx) == PI_OK);
 }
 static void card_case(const char *dump)
 {
@@ -332,7 +343,7 @@ int main(int argc, char **argv)
     CHECK(PCIInitBase != NULL);
     if (!PCIInitBase)
         return 20;
-    CHECK(PCIInitBase->lib_NegSize == 120);
+    CHECK(PCIInitBase->lib_NegSize == 132);
     again = OpenLibrary((STRPTR) "pciinit.library", 1);
     CHECK(again == PCIInitBase);
     if (again)

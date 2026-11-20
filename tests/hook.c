@@ -423,6 +423,47 @@ static void bulk_routine_case(void)
     pi_bus_copy32(big, source + 4, 2);
     CHECK(!memcmp(big, source + 4, 8) && big[4] == ((source[8] << 8) | source[9]));
 }
+/* What the ROM reached, for PCIInitContextInfo.legacy_used, and ports
+ * on a bus board without an I/O window. */
+static void usage_case(void)
+{
+    const uint8_t source[4]       = {1, 2, 3, 4};
+    struct X86BulkRequest copy    = {sizeof(copy), X86_BULK_COPY, 0, 0xa0300, 1, 4, 0, 1};
+    struct PCIInitDiagnostics *d0 = ctx.diagnostics;
+    uint32_t v;
+    reset(0);
+    memset(ctx.used, 0, sizeof(ctx.used));
+    CHECK(access(0xcf8, 4, X86_IN, 0, &v) == 0 && access(0x80, 1, X86_OUT, 0x12, NULL) == 0);
+    CHECK(access(0x61, 1, X86_IN, 0, &v) == 0 && pi_hardware_used(&ctx) == 0);
+    CHECK(access(0x3c4, 1, X86_IN, 0, &v) == 0 && pi_hardware_used(&ctx) == PI_USED_VGA_PORTS);
+    CHECK(access(0x8180, 1, X86_IN, 0, &v) == 0 && pi_hardware_used(&ctx) == (PI_USED_VGA_PORTS | PI_USED_IO_PORTS));
+    memset(ctx.used, 0, sizeof(ctx.used));
+    CHECK(access(0xe0000100, 4, X86_READ, 0, &v) == 0 && pi_hardware_used(&ctx) == 0);
+    CHECK(access(0xa0010, 2, X86_READ, 0, &v) == 0 && pi_hardware_used(&ctx) == PI_USED_VGA_MEMORY);
+    memset(ctx.used, 0, sizeof(ctx.used));
+    ctx.diagnostics = NULL;
+    pi_hardware_bulk(&ctx, &copy, source);
+    CHECK(pi_hardware_used(&ctx) == PI_USED_VGA_MEMORY);
+    ctx.diagnostics = d0;
+    /* No I/O window: ports read all-ones, writes are dropped, and the run
+     * is flagged; memory still works. Both access paths. */
+    ctx.io        = 0;
+    ctx.io_missed = 0;
+    pi_hardware_flags(&ctx);
+    io[0x3cc]  = 0x67;
+    io[0x8180] = 0;
+    CHECK(access(0x3cc, 1, X86_IN, 0, &v) == 0 && v == 0xff && ctx.io_missed);
+    CHECK(access(0x3c4, 2, X86_IN, 0, &v) == 0 && v == 0xffff);
+    CHECK(access(0x8180, 4, X86_IN, 0, &v) == 0 && v == 0xffffffffU);
+    CHECK(access(0x8180, 1, X86_OUT, 0x99, NULL) == 0 && io[0x8180] == 0);
+    reset(1);
+    CHECK(access(0x8180, 2, X86_IN, 0, &v) == 0 && v == 0xffff && calls == 2);
+    CHECK(access(0xa0010, 2, X86_READ, 0, &v) == 0 && v == 0x1234);
+    ctx.io        = (uint32_t)io;
+    ctx.io_missed = 0;
+    reset(0);
+    CHECK(!ctx.detour);
+}
 
 int main(void)
 {
@@ -450,6 +491,7 @@ int main(void)
     decode_case();
     bus_error_case();
     missing_window_case();
+    usage_case();
     printf("HOOK RESULT checks=%u failures=%u\n", checks, failures);
     return failures ? 20 : 0;
 }

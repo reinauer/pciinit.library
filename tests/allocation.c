@@ -58,7 +58,8 @@ int main(int argc, char **argv)
     struct Library *pci   = NULL;
     struct pci_dev *board = NULL;
     base.sys              = pi_sysbase();
-    base.engine           = OpenLibrary((STRPTR) "x86emu.library", 1);
+    InitSemaphore(&base.vga_lock);
+    base.engine = OpenLibrary((STRPTR) "x86emu.library", 1);
     CHECK(base.engine != NULL);
     if (!base.engine)
         return 20;

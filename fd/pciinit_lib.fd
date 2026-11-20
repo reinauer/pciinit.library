@@ -17,4 +17,6 @@ MapFramebuffer(ctx,info)(a0,a1)
 UnmapFramebuffer(ctx)(a0)
 WriteFramebuffer(ctx,offset,source,bytes)(a0,d0,a1,d1)
 ReadFramebuffer(ctx,offset,destination,bytes)(a0,d0,a1,d1)
+ObtainLegacyVGA(ctx)(a0)
+ReleaseLegacyVGA(ctx)(a0)
 ##end
