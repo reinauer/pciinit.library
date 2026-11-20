@@ -64,9 +64,8 @@ the nearest `v<version>.<revision>` git tag, such as `v2.4`, `v2.4.1` or
 `v2.4-rc1`; `make version` prints them and `RELEASE_VERSION=` overrides
 them. AmigaOS versions have no third number, so a package number or suffix
 follows the date in the library ID string. Pushing such a tag builds and
-tests the archive and attaches it to a draft GitHub release; running the
-release workflow by hand with the Aminet option uploads a checked release
-to Aminet.
+tests the archive, attaches it to a draft GitHub release and uploads it to
+Aminet; pre-release tags such as `v2.4-rc1` stay off Aminet.
 
 The sources follow the `.clang-format` style in the repository root:
 `make format` applies it and `make check-format` verifies it
