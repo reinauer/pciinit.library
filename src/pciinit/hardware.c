@@ -41,10 +41,10 @@ static uint32_t swap(uint32_t v, unsigned width)
  * handler runs (see bus.S), so the trap-safe routines would add a call and
  * two NOPs to every access there for nothing. They are used on the
  * 68040/060 only; elsewhere card accesses stay plain loads and stores. */
-static void store(const PCIInitContext *c, uint32_t address, unsigned width, uint32_t value)
+static inline void store(unsigned routines, uint32_t address, unsigned width, uint32_t value)
 {
     volatile void *p = (volatile void *)address;
-    if (!c->bus_routines) {
+    if (!routines) {
         if (width == 1)
             *(volatile uint8_t *)p = value;
         else if (width == 2)
@@ -58,10 +58,10 @@ static void store(const PCIInitContext *c, uint32_t address, unsigned width, uin
     else
         pi_bus_write32(p, value);
 }
-static uint32_t load(const PCIInitContext *c, uint32_t address, unsigned width)
+static inline uint32_t load(unsigned routines, uint32_t address, unsigned width)
 {
     volatile void *p = (volatile void *)address;
-    if (!c->bus_routines) {
+    if (!routines) {
         if (width == 1)
             return *(volatile uint8_t *)p;
         if (width == 2)
@@ -78,13 +78,14 @@ static uint32_t load(const PCIInitContext *c, uint32_t address, unsigned width)
  * with its low byte first, which is a swapped 68k word or longword. A bus
  * error caught by the trap handler ends the cycle as an aborted PCI cycle
  * would (see bus.S). */
-static uint32_t transaction(const PCIInitContext *c, uint32_t address, unsigned width, unsigned write, uint32_t value)
+static inline uint32_t transaction(unsigned routines, uint32_t address, unsigned width, unsigned write,
+                                   uint32_t value)
 {
     if (write) {
-        store(c, address, width, swap(value, width));
+        store(routines, address, width, swap(value, width));
         return 0;
     }
-    return swap(load(c, address, width), width);
+    return swap(load(routines, address, width), width);
 }
 /* bus.S reaches these by fixed offsets. */
 _Static_assert(offsetof(struct ExecBase, ThisTask) == 276, "ExecBase.ThisTask");
@@ -171,8 +172,9 @@ static uint32_t after_hook(PCIInitContext *c, struct PCIInitAccessMsg *m, unsign
 }
 /* One access to the card. A CPU address of zero is a missing window:
  * reads return zero and writes are dropped. VGA ports split into byte
- * cycles. Inlined into each caller, as the accesses were before hooks. */
-static inline __attribute__((always_inline)) void card_access(PCIInitContext *c, uint32_t space, uint32_t offset,
+ * cycles. Inlined into each caller; the inline path in card() passes
+ * routines = 0, so it compiles to plain loads and stores only. */
+static inline __attribute__((always_inline)) void card_access(unsigned routines, uint32_t space, uint32_t offset,
                                                               uint32_t cpu, unsigned width, unsigned write,
                                                               uint32_t *value)
 {
@@ -184,16 +186,16 @@ static inline __attribute__((always_inline)) void card_access(PCIInitContext *c,
         uint32_t v = 0;
         for (i = 0; i < width; ++i) {
             if (write)
-                store(c, cpu + i, 1, (*value >> (8 * i)) & 255);
+                store(routines, cpu + i, 1, (*value >> (8 * i)) & 255);
             else
-                v |= load(c, cpu + i, 1) << (8 * i);
+                v |= load(routines, cpu + i, 1) << (8 * i);
         }
         if (!write)
             *value = v;
     } else if (write)
-        transaction(c, cpu, width, 1, *value);
+        transaction(routines, cpu, width, 1, *value);
     else
-        *value = transaction(c, cpu, width, 0, 0);
+        *value = transaction(routines, cpu, width, 0, 0);
 }
 /* The same access through the access hook, and with the decode it needs
  * turned off by the ROM, completed here as the master abort it would be:
@@ -207,15 +209,21 @@ static __attribute__((noinline)) uint32_t detour_card(PCIInitContext *c, uint32_
     if (verdict != PI_HOOK_PASS)
         return verdict == PI_HOOK_FAULT;
     if (c->decode & (space == PI_SPACE_IO ? PCI_COMMAND_IO : PCI_COMMAND_MEMORY))
-        card_access(c, space, offset, cpu, width, write, value);
+        card_access(c->bus_routines, space, offset, cpu, width, write, value);
     else if (!write)
         *value = 0xffffffffU >> (32 - 8 * width);
     return after_hook(c, &m, write, value);
 }
+/* The two flags the access path tests, from the fields they summarize. */
+void pi_hardware_flags(PCIInitContext *c)
+{
+    c->detour = c->hook || c->bus_routines || c->decode != (PCI_COMMAND_IO | PCI_COMMAND_MEMORY);
+    c->watch  = c->hook || c->stop_bus_error;
+}
 static void set_decode(PCIInitContext *c, uint32_t command)
 {
     c->decode = command & (PCI_COMMAND_IO | PCI_COMMAND_MEMORY);
-    c->detour = c->hook || c->decode != (PCI_COMMAND_IO | PCI_COMMAND_MEMORY);
+    pi_hardware_flags(c);
 }
 /* Returns the access status: nonzero stops the run. */
 static inline __attribute__((always_inline)) uint32_t card(PCIInitContext *c, uint32_t space, uint32_t bar,
@@ -224,7 +232,7 @@ static inline __attribute__((always_inline)) uint32_t card(PCIInitContext *c, ui
 {
     if (c->detour)
         return detour_card(c, space, bar, offset, cpu, width, write, value);
-    card_access(c, space, offset, cpu, width, write, value);
+    card_access(0, space, offset, cpu, width, write, value);
     return 0;
 }
 void pi_trace(PCIInitContext *c, uint32_t op, uint32_t addr, uint32_t width, uint32_t value)
@@ -336,8 +344,8 @@ uint32_t pi_hardware_start(PCIInitContext *c)
             op_unregion(c->pci, c->board, probe);
         c->legacy = op_region(c->pci, c->board, PI_LEGACY_BASE, PI_LEGACY_BYTES);
     }
-    set_decode(c, PCI_COMMAND_IO | PCI_COMMAND_MEMORY);
     trap_install(c);
+    set_decode(c, PCI_COMMAND_IO | PCI_COMMAND_MEMORY);
     return PI_OK;
 }
 void pi_hardware_finish(PCIInitContext *c)
@@ -396,7 +404,6 @@ static
 {
     unsigned write  = op == X86_WRITE || op == X86_OUT;
     uint32_t result = 1;
-    c->hook_changed = 0;
     if (op == X86_IN || op == X86_OUT) {
         if (c->diagnostics)
             ++c->diagnostics->io_accesses;
@@ -534,11 +541,18 @@ static
             }
         }
     }
-    if (c->stop_bus_error && c->trap.faults != c->faults_seen) {
-        c->faults_seen = c->trap.faults;
-        result         = 1;
+    if (c->watch) {
+        if (c->stop_bus_error && c->trap.faults != c->faults_seen) {
+            c->faults_seen = c->trap.faults;
+            result         = 1;
+        }
+        /* Only a hook call sets hook_changed; it is cleared here. */
+        if (c->hook_changed) {
+            op |= PI_TRACE_HOOKED;
+            c->hook_changed = 0;
+        }
     }
-    pi_trace(c, op | (c->hook_changed ? PI_TRACE_HOOKED : 0), address, width, *value);
+    pi_trace(c, op, address, width, *value);
     return result;
 }
 #ifdef PCIINIT_RECORD
@@ -651,7 +665,9 @@ uint32_t pi_bios(PCIInitContext *c, uint32_t number, struct X86Registers *r)
         } else if (f >= 8 && f <= 13) {
             unsigned width = 1U << ((f - 8) % 3), write = f >= 11;
             uint32_t value = r->ecx & (width == 1 ? 255U : width == 2 ? 65535U : 0xffffffffU);
-            if (config(c, r->ebx & 65535, r->edi & 65535, width, write, &value))
+            uint32_t failed = config(c, r->ebx & 65535, r->edi & 65535, width, write, &value);
+            c->hook_changed = 0; /* marks traced port accesses only */
+            if (failed)
                 bios_status(r, 0x87);
             else {
                 if (!write)
@@ -762,14 +778,20 @@ uint32_t pi_hardware_scan(PCIInitContext *c, const struct X86ScanRequest *s, uin
         s->width * s->count > PI_LEGACY_BYTES - (s->address - PI_LEGACY_BASE) ||
         hooked(c, PI_SPACE_LEGACY, 0, s->address - PI_LEGACY_BASE, s->width * s->count))
         return 0;
-    cpu = (uint32_t)c->legacy + (s->address - PI_LEGACY_BASE);
-    if (!c->legacy)
-        c->legacy_missed = 1;
-    for (i = 0; i < s->count;) {
-        value = c->legacy ? transaction(c, cpu + i * s->width, s->width, 0, 0) : 0;
-        ++i;
-        if ((value == s->expected) != s->repeat_equal)
-            break;
+    /* Locals, because a bus routine call would make the compiler reload
+     * every field of *s and *c for each element. */
+    {
+        const uint32_t width = s->width, count = s->count, expected = s->expected;
+        const unsigned equal = s->repeat_equal, routines = c->bus_routines, present = c->legacy != NULL;
+        cpu = (uint32_t)c->legacy + (s->address - PI_LEGACY_BASE);
+        if (!present)
+            c->legacy_missed = 1;
+        for (i = 0; i < count; cpu += width) {
+            value = present ? transaction(routines, cpu, width, 0, 0) : 0;
+            ++i;
+            if ((value == expected) != equal)
+                break;
+        }
     }
     *last = value;
     return i;
