@@ -171,7 +171,8 @@ static uint32_t after_hook(PCIInitContext *c, struct PCIInitAccessMsg *m, unsign
     return verdict == PI_HOOK_FAULT;
 }
 /* One access to the card. A CPU address of zero is a missing window:
- * reads return zero and writes are dropped. VGA ports split into byte
+ * memory reads return zero, port reads all-ones (the PC's floating bus),
+ * and writes are dropped. VGA ports split into byte
  * cycles. Inlined into each caller; the inline path in card() passes
  * routines = 0, so it compiles to plain loads and stores only. */
 static inline __attribute__((always_inline)) void card_access(unsigned routines, uint32_t space, uint32_t offset,
@@ -180,7 +181,7 @@ static inline __attribute__((always_inline)) void card_access(unsigned routines,
 {
     if (!cpu) {
         if (!write)
-            *value = 0;
+            *value = space == PI_SPACE_IO ? 0xffffffffU >> (32 - 8 * width) : 0;
     } else if (space == PI_SPACE_IO && offset >= 0x3b0 && offset < 0x3e0) {
         unsigned i;
         uint32_t v = 0;
@@ -197,8 +198,9 @@ static inline __attribute__((always_inline)) void card_access(unsigned routines,
     else
         *value = transaction(routines, cpu, width, 0, 0);
 }
-/* The same access through the access hook, and with the decode it needs
- * turned off by the ROM, completed here as the master abort it would be:
+/* The same access through the access hook, without the bus board's I/O
+ * window, or with the decode it needs turned off by the ROM, completed
+ * here as the master abort it would be:
  * a PC host bridge returns all-ones for a cycle no device claims, where an
  * Amiga bridge may end it with a bus error. */
 static __attribute__((noinline)) uint32_t detour_card(PCIInitContext *c, uint32_t space, uint32_t bar, uint32_t offset,
@@ -210,16 +212,26 @@ static __attribute__((noinline)) uint32_t detour_card(PCIInitContext *c, uint32_
         return verdict == PI_HOOK_FAULT;
     if (space == PI_SPACE_LEGACY && !cpu)
         c->legacy_missed = 1;
+    if (space == PI_SPACE_IO && !c->io) {
+        cpu          = 0;
+        c->io_missed = 1;
+    }
     if (c->decode & (space == PI_SPACE_IO ? PCI_COMMAND_IO : PCI_COMMAND_MEMORY))
         card_access(c->bus_routines, space, offset, cpu, width, write, value);
     else if (!write)
         *value = 0xffffffffU >> (32 - 8 * width);
     return after_hook(c, &m, write, value);
 }
+/* The PI_USED_* bits of the used[] flags. */
+uint32_t pi_hardware_used(const PCIInitContext *c)
+{
+    return (c->used[0] ? PI_USED_VGA_PORTS : 0) | (c->used[1] ? PI_USED_IO_PORTS : 0) |
+           (c->used[2] ? PI_USED_VGA_MEMORY : 0);
+}
 /* The two flags the access path tests, from the fields they summarize. */
 void pi_hardware_flags(PCIInitContext *c)
 {
-    c->detour = c->hook || c->bus_routines || c->decode != (PCI_COMMAND_IO | PCI_COMMAND_MEMORY);
+    c->detour = c->hook || c->bus_routines || c->decode != (PCI_COMMAND_IO | PCI_COMMAND_MEMORY) || !c->io;
     c->watch  = c->hook || c->stop_bus_error;
 }
 static void set_decode(PCIInitContext *c, uint32_t command)
@@ -236,6 +248,15 @@ static inline __attribute__((always_inline)) uint32_t card(PCIInitContext *c, ui
         return detour_card(c, space, bar, offset, cpu, width, write, value);
     card_access(0, space, offset, cpu, width, write, value);
     return 0;
+}
+/* A port on the PCI bus, through the bus board's I/O window; used is the
+ * call site's PI_USED_* bit, a constant, and its byte flag is a single
+ * store. Without a window the access takes the detour, which completes it. */
+static inline __attribute__((always_inline)) uint32_t port(PCIInitContext *c, uint32_t used, uint32_t address,
+                                                           unsigned width, unsigned write, uint32_t *value)
+{
+    c->used[used >> 1] = 1;
+    return card(c, PI_SPACE_IO, 0, address, c->io + address, width, write, value);
 }
 void pi_trace(PCIInitContext *c, uint32_t op, uint32_t addr, uint32_t width, uint32_t value)
 {
@@ -285,29 +306,163 @@ static void read_bars(PCIInitContext *c)
         c->bars[c->bar_count++] = (struct PIBar){bus, cpu, size, i};
     }
 }
+static uint32_t bdf(struct Library *pci, struct pci_dev *board)
+{
+    return (op_attr(pci, board, PRM_BusNumber) << 8) | (op_attr(pci, board, PRM_SlotNumber) << 3) |
+           op_attr(pci, board, PRM_FunctionNumber);
+}
+static int display(struct Library *pci, struct pci_dev *board)
+{
+    uint32_t classcode = op_read(pci, board, 8, 4) >> 8;
+    return (classcode >> 16) == 3 || classcode == 0x000100;
+}
+/* The card's address, I/O window and whether it is VGA compatible. A bus
+ * board without an I/O window leaves io zero: ports then read all-ones
+ * and writes are dropped, flagged with PI_WARN_NO_IO_WINDOW. */
+static void identify(PCIInitContext *c)
+{
+    uint32_t classcode = op_read(c->pci, c->board, 8, 4) >> 8;
+    c->io              = op_attr(c->pci, c->board, PRM_LegacyIOSpace);
+    if (c->io > 0xffff0000U)
+        c->io = 0;
+    c->vga = (classcode >> 8) == 0x0300 || classcode == 0x000100;
+    c->bdf = bdf(c->pci, c->board);
+}
+/* One byte at a VGA port, outside the ROM's accesses: no hook, no trace.
+ * routines is zero outside a call, where no trap handler is installed. */
+static uint32_t vga_port(PCIInitContext *c, unsigned routines, uint32_t reg, unsigned write, uint32_t value)
+{
+    card_access(routines, PI_SPACE_IO, reg, c->io + reg, 1, write, &value);
+    return value & 0xff;
+}
+/* Takes legacy VGA away from a card: RAM Enable (bit 1 of the
+ * Miscellaneous Output register) off ends VGA memory A0000-BFFFF, I/O
+ * decode off ends the VGA ports. The value is kept for the card's next
+ * call. BARs, framebuffer and display are unaffected. */
+static void vga_off(PCIInitContext *h, unsigned routines)
+{
+    uint32_t command = op_read(h->pci, h->board, PCI_COMMAND, 2), faults = h->trap.faults, misc;
+    if (h->vga && h->io) {
+        if (!(command & PCI_COMMAND_IO))
+            op_write(h->pci, h->board, PCI_COMMAND, command | PCI_COMMAND_IO, 2);
+        misc          = vga_port(h, routines, 0x3cc, 0, 0);
+        h->misc_saved = h->trap.faults == faults;
+        if (h->misc_saved) {
+            h->misc = misc;
+            vga_port(h, routines, 0x3c2, 1, misc & ~2U);
+        }
+    }
+    op_write(h->pci, h->board, PCI_COMMAND, command & ~PCI_COMMAND_IO, 2);
+}
+/* The VGA arbiter, with the base's vga_lock held: one card on the bus
+ * decodes legacy VGA at a time. VGA moves to c from the card of another
+ * context; a display controller no context knows that decodes I/O
+ * blocks it, as does a context holding ObtainLegacyVGA. */
+static uint32_t take_vga(PCIInitContext *c)
+{
+    PCIInitContext *h     = c->owner->vga_holder;
+    struct pci_dev *other = NULL;
+    uint32_t command;
+    while ((other = op_find(c->pci, other))) {
+        if (other != c->board && (!h || other != h->board) && display(c->pci, other) &&
+            (op_read(c->pci, other, PCI_COMMAND, 2) & PCI_COMMAND_IO)) {
+            c->info.blocking_card = bdf(c->pci, other);
+            return PI_UNSUPPORTED_MAPPING;
+        }
+    }
+    if (h && h != c) {
+        if (h->vga_obtained) {
+            c->info.blocking_card = h->bdf;
+            return PI_UNSUPPORTED_MAPPING;
+        }
+        /* vga_off may turn the other card's I/O decode on for a moment. */
+        command = op_read(c->pci, c->board, PCI_COMMAND, 2);
+        if (command & PCI_COMMAND_IO)
+            op_write(c->pci, c->board, PCI_COMMAND, command & ~PCI_COMMAND_IO, 2);
+        vga_off(h, 0);
+    }
+    c->owner->vga_holder = c;
+    return PI_OK;
+}
+static void vga_unlock(PCIInitContext *c)
+{
+    struct ExecBase *SysBase = c->owner->sys;
+    if (c->vga_locked) {
+        c->vga_locked = 0;
+        ReleaseSemaphore(&c->owner->vga_lock);
+    }
+}
+uint32_t pi_vga_obtain(struct PIBase *base, PCIInitContext *c)
+{
+    struct ExecBase *SysBase = base->sys;
+    uint32_t command, status;
+    if (!c || c->owner != base)
+        return PI_BAD_ARGUMENT;
+    if (!c->hardware || !c->board || c->info.state == PI_EXECUTING || c->vga_obtained == 255 ||
+        (base->mapping_owner && base->mapping_owner != c))
+        return PI_BAD_STATE;
+    ObtainSemaphore(&base->vga_lock);
+    identify(c);
+    c->info.blocking_card = PI_NO_BLOCKING_CARD;
+    command               = op_read(c->pci, c->board, PCI_COMMAND, 2);
+    status                = c->io ? take_vga(c) : PI_UNSUPPORTED_MAPPING;
+    if (status) {
+        ReleaseSemaphore(&base->vga_lock);
+        return status;
+    }
+    op_write(c->pci, c->board, PCI_COMMAND, command | PCI_COMMAND_IO | PCI_COMMAND_MEMORY, 2);
+    if (c->misc_saved)
+        vga_port(c, 0, 0x3c2, 1, c->misc);
+    c->misc_saved = 0;
+    ++c->vga_obtained;
+    return PI_OK;
+}
+uint32_t pi_vga_release(struct PIBase *base, PCIInitContext *c)
+{
+    struct ExecBase *SysBase = base->sys;
+    if (!c || c->owner != base)
+        return PI_BAD_ARGUMENT;
+    if (!c->vga_obtained)
+        return PI_BAD_STATE;
+    if (!--c->vga_obtained && c->release_vga) {
+        vga_off(c, 0);
+        base->vga_holder = NULL;
+    }
+    ReleaseSemaphore(&base->vga_lock);
+    return PI_OK;
+}
+/* A deleted context's card keeps its decode; the arbiter forgets it. */
+void pi_vga_forget(PCIInitContext *c)
+{
+    struct ExecBase *SysBase = c->owner->sys;
+    if (c->owner->vga_holder != c)
+        return;
+    ObtainSemaphore(&c->owner->vga_lock);
+    if (c->owner->vga_holder == c)
+        c->owner->vga_holder = NULL;
+    ReleaseSemaphore(&c->owner->vga_lock);
+}
 uint32_t pi_hardware_start(PCIInitContext *c)
 {
     struct ExecBase *SysBase = c->owner->sys;
-    struct pci_dev *other    = NULL;
+    uint32_t status;
     if (c->owner->mapping_owner)
         return PI_BAD_STATE;
     if (!c->hardware)
         return PI_UNSUPPORTED_MAPPING;
-    /* Classic VGA ports are shared. Do not initialize through another
-     * display controller that is already decoding I/O on this bridge. */
-    while ((other = op_find(c->pci, other))) {
-        uint32_t classcode = op_read(c->pci, other, 8, 4) >> 8;
-        if (other != c->board && ((classcode >> 16) == 3 || classcode == 0x000100) &&
-            (op_read(c->pci, other, PCI_COMMAND, 2) & 1))
-            return PI_UNSUPPORTED_MAPPING;
-    }
-    c->io = op_attr(c->pci, c->board, PRM_LegacyIOSpace);
-    if (!c->io || c->io > 0xffff0000U)
-        return PI_UNSUPPORTED_MAPPING;
+    c->info.blocking_card = PI_NO_BLOCKING_CARD;
+    identify(c);
     read_bars(c);
-    c->bdf        = (op_attr(c->pci, c->board, PRM_BusNumber) << 8) | (op_attr(c->pci, c->board, PRM_SlotNumber) << 3) |
-                    op_attr(c->pci, c->board, PRM_FunctionNumber);
-    c->command    = op_read(c->pci, c->board, PCI_COMMAND, 2);
+    c->command = op_read(c->pci, c->board, PCI_COMMAND, 2);
+    /* Classic VGA ports and memory are shared by every display controller
+     * on the bus; the arbiter gives them to this card for the call. */
+    ObtainSemaphore(&c->owner->vga_lock);
+    c->vga_locked = 1;
+    status        = take_vga(c);
+    if (status) {
+        vga_unlock(c);
+        return status;
+    }
     c->timer_port = CreateMsgPort();
     if (c->timer_port)
         c->timer = (struct timerequest *)CreateIORequest(c->timer_port, sizeof(*c->timer));
@@ -318,6 +473,8 @@ uint32_t pi_hardware_start(PCIInitContext *c)
             DeleteMsgPort(c->timer_port);
         c->timer      = NULL;
         c->timer_port = NULL;
+        op_write(c->pci, c->board, PCI_COMMAND, c->command, 2);
+        vga_unlock(c);
         return PI_NO_MEMORY;
     }
     /* Ownership excludes another driver. Keep DMA disabled while the ROM
@@ -332,7 +489,9 @@ uint32_t pi_hardware_start(PCIInitContext *c)
      * empty window (reads zero, writes dropped) and the run is flagged
      * with PI_WARN_NO_LEGACY_WINDOW. */
     c->legacy_missed = 0;
-    c->legacy        = op_region(c->pci, c->board, PI_LEGACY_BASE, PI_LEGACY_BYTES);
+    c->io_missed     = 0;
+    c->used[0] = c->used[1] = c->used[2] = 0;
+    c->legacy                            = op_region(c->pci, c->board, PI_LEGACY_BASE, PI_LEGACY_BYTES);
     /* A held region may hide every other PCI window. BAR accesses are
      * forwarded only where a region is the permanent address itself. */
     c->bars_visible = 1;
@@ -348,24 +507,39 @@ uint32_t pi_hardware_start(PCIInitContext *c)
     }
     trap_install(c);
     set_decode(c, PCI_COMMAND_IO | PCI_COMMAND_MEMORY);
+    /* VGA memory decode taken away since the card's last call comes back,
+     * so the ROM finds its own state. */
+    if (c->misc_saved && c->io)
+        vga_port(c, c->bus_routines, 0x3c2, 1, c->misc);
+    c->misc_saved = 0;
     return PI_OK;
 }
 void pi_hardware_finish(PCIInitContext *c)
 {
     struct ExecBase *SysBase = c->owner->sys;
+    /* PII_ReleaseVGA: the card gives legacy VGA up until its next call. */
+    if (c->release_vga && c->trap_installed && !c->vga_obtained) {
+        vga_off(c, c->bus_routines);
+        c->owner->vga_holder = NULL;
+    }
     if (c->trap_installed)
         trap_remove(c);
     if (c->legacy)
         op_unregion(c->pci, c->board, c->legacy);
     if (c->legacy_missed)
         c->info.warnings |= PI_WARN_NO_LEGACY_WINDOW;
+    if (c->io_missed)
+        c->info.warnings |= PI_WARN_NO_IO_WINDOW;
+    c->info.legacy_used |= pi_hardware_used(c);
     c->legacy = NULL;
-    op_write(c->pci, c->board, PCI_COMMAND, c->command, 2);
+    op_write(c->pci, c->board, PCI_COMMAND,
+             c->release_vga && !c->vga_obtained ? c->command & ~PCI_COMMAND_IO : c->command, 2);
     CloseDevice((struct IORequest *)c->timer);
     DeleteIORequest((struct IORequest *)c->timer);
     DeleteMsgPort(c->timer_port);
     c->timer      = NULL;
     c->timer_port = NULL;
+    vga_unlock(c);
 }
 /* Reads enumerate only the owned card. No probes or relocation reach
  * hardware. Returns 0, 1 for a refused access, or 2 when the access hook
@@ -413,7 +587,7 @@ static
             ++c->diagnostics->io_accesses;
         if (address >= 0x3b0 && address + width <= 0x3e0) {
             /* VGA indexed ports define adjacent byte operations for OUTW. */
-            result = card(c, PI_SPACE_IO, 0, address, (uint32_t)c->io + address, width, write, value);
+            result = port(c, PI_USED_VGA_PORTS, address, width, write, value);
         } else if (address == 0xcf8 && width == 4) {
             if (write)
                 c->cf8 = *value;
@@ -519,11 +693,12 @@ static
              * what it owns (8514-style ports, a Trio64 BIOS's 32-bit write
              * to 8180h, a ViRGE's DDC port at E8h) and the bridge terminates
              * the rest. One aligned transaction of the guest's width. */
-            result = card(c, PI_SPACE_IO, 0, address, (uint32_t)c->io + address, width, write, value);
+            result = port(c, PI_USED_IO_PORTS, address, width, write, value);
         }
     } else if (op != X86_FETCH && legacy_range(address, width)) {
         if (c->diagnostics)
             ++c->diagnostics->vga_accesses;
+        c->used[2] = 1;
         /* With a hook, detour_card() flags it unless the hook completes it. */
         if (!c->legacy && !c->hook)
             c->legacy_missed = 1;
@@ -720,6 +895,7 @@ static
     /* RAM bytes are already in guest memory order, and a 68k word or
      * longword store of the first byte high keeps that order on the bus.
      * A bus error ends the request; its remaining stores are dropped. */
+    c->used[2] = 1;
     if (!c->legacy)
         c->legacy_missed = 1; /* dropped, see pi_hardware_access */
     else if (r.width == 1) {
@@ -789,7 +965,8 @@ uint32_t pi_hardware_scan(PCIInitContext *c, const struct X86ScanRequest *s, uin
     {
         const uint32_t width = s->width, count = s->count, expected = s->expected;
         const unsigned equal = s->repeat_equal, routines = c->bus_routines, present = c->legacy != NULL;
-        cpu = (uint32_t)c->legacy + (s->address - PI_LEGACY_BASE);
+        cpu        = (uint32_t)c->legacy + (s->address - PI_LEGACY_BASE);
+        c->used[2] = 1;
         if (!present)
             c->legacy_missed = 1;
         for (i = 0; i < count; cpu += width) {

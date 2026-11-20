@@ -86,6 +86,15 @@ static ULONG read_fb(REG(PCIInitContext *, ctx, a0), REG(ULONG, offset, d0), REG
 {
     return pi_fb_transfer(base, ctx, offset, destination, bytes, 0);
 }
-const APTR lib_vectors[] = {lib_open,   lib_close, lib_expunge, lib_reserved, load_file,    load_card, free_image,
-                            image_info, create,    destroy,     run,          context_info, vbe_info,  mode_info,
-                            set_mode,   get_mode,  map_fb,      unmap_fb,     write_fb,     read_fb,   (APTR)-1};
+static ULONG obtain_vga(REG(PCIInitContext *, ctx, a0), BASE)
+{
+    return pi_vga_obtain(base, ctx);
+}
+static ULONG release_vga(REG(PCIInitContext *, ctx, a0), BASE)
+{
+    return pi_vga_release(base, ctx);
+}
+const APTR lib_vectors[] = {lib_open,   lib_close,  lib_expunge, lib_reserved, load_file, load_card,
+                            free_image, image_info, create,      destroy,      run,       context_info,
+                            vbe_info,   mode_info,  set_mode,    get_mode,     map_fb,    unmap_fb,
+                            write_fb,   read_fb,    obtain_vga,  release_vga,  (APTR)-1};

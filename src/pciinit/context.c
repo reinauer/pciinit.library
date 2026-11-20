@@ -215,6 +215,7 @@ PCIInitContext *pi_create(struct PIBase *base, struct pci_dev *board, const stru
     ctx->diagnostics    = opts.diagnostics;
     ctx->quirks         = !!opts.quirks;
     ctx->stop_bus_error = !!opts.stop_bus_error;
+    ctx->release_vga    = !!opts.release_vga;
     ctx->hook           = opts.hook;
     ctx->range_count    = opts.range_count;
     ctx->services       = opts.services;
@@ -222,6 +223,7 @@ PCIInitContext *pi_create(struct PIBase *base, struct pci_dev *board, const stru
         memcpy(ctx->ranges, opts.ranges, opts.range_count * sizeof(ctx->ranges[0]));
     ctx->info.size           = sizeof(ctx->info);
     ctx->info.offline        = !!opts.offline;
+    ctx->info.blocking_card  = PI_NO_BLOCKING_CARD;
     ctx->info.execution.size = sizeof(ctx->info.execution);
     ctx->limits              = (struct X86Limits){sizeof(ctx->limits), 1000000, 10000000, 5000, NULL};
     if (opts.hardware)
@@ -289,10 +291,11 @@ uint32_t pi_delete(struct PIBase *base, PCIInitContext *ctx)
     struct ExecBase *SysBase = base->sys;
     if (!ctx || ctx->owner != base)
         return PI_BAD_ARGUMENT;
-    if (ctx->info.state == PI_EXECUTING || ctx->framebuffer)
+    if (ctx->info.state == PI_EXECUTING || ctx->framebuffer || ctx->vga_obtained)
         return PI_BAD_STATE;
     if (x86_delete(base->engine, ctx->cpu))
         return PI_BAD_STATE;
+    pi_vga_forget(ctx);
     pi_free(ctx->ram);
     if (ctx->board)
         op_release(ctx->pci, ctx->board);
@@ -321,6 +324,7 @@ uint32_t pi_run(struct PIBase *base, PCIInitContext *ctx, const PCIInitImage *im
     ctx->info.missing_service   = 0;
     ctx->info.bus_errors        = 0;
     ctx->info.bus_error_address = 0;
+    ctx->info.legacy_used       = 0;
     if (ctx->services)
         ctx->services->count = 0;
     if (!ctx->info.offline) {

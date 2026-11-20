@@ -87,6 +87,7 @@ PCIoprom --list-modes
 PCIoprom --mode 0x111 --mode 0x114 --mode 0x111 --pattern
 PCIoprom --trace
 PCIoprom --services
+PCIoprom --release-vga
 ```
 
 Without arguments `PCIoprom` runs every card's own ROM. A file argument is
@@ -102,8 +103,12 @@ bus board provides one, and otherwise the program says why nothing was
 drawn. `--trace` adds the last 128 I/O, VGA, BAR and interrupt accesses of
 each ROM run or failed BIOS call to the CPU summary. `--services` lets BIOS
 services that neither the ROM nor the library provides fail instead of
-stopping the run, and lists each one afterwards. The last mode stays on
-the display when the program exits.
+stopping the run, and lists each one afterwards. After each ROM run a
+`LEGACY` line says whether the ROM used the VGA ports, other I/O ports and
+VGA memory. When a card cannot run because another display card answers
+the VGA ports, the program names that card. `--release-vga` turns each
+card's VGA port and memory decode off after use, so the next card can
+have them. The last mode stays on the display when the program exits.
 
 The exit code is 0 when every attempted initialization succeeded, 5 when a
 POST could not run or no usable ROM was found, and 20 on errors.

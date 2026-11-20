@@ -18,4 +18,6 @@ uint32_t MapFramebuffer(PCIInitContext *, struct PCIInitFramebuffer *);
 uint32_t UnmapFramebuffer(PCIInitContext *);
 uint32_t WriteFramebuffer(PCIInitContext *, uint32_t, const void *, uint32_t);
 uint32_t ReadFramebuffer(PCIInitContext *, uint32_t, void *, uint32_t);
+uint32_t ObtainLegacyVGA(PCIInitContext *);
+uint32_t ReleaseLegacyVGA(PCIInitContext *);
 #endif
