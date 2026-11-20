@@ -21,7 +21,7 @@ def main():
                         help='emulated bus board; only FireStorm reaches legacy VGA memory')
     parser.add_argument('--openpci', type=Path, default=ROOT / 'fixture/out/pinned-openpci.library',
                         help='openpci.library binary to install in the guest')
-    parser.add_argument('--suite', choices=('foundation', 'backend', 'post', 'display', 'vbe', 'vbe-cli', 'boing-cli', 'post-timing', 'record', 'profile', 'deadline', 'bustrap'), default='foundation')
+    parser.add_argument('--suite', choices=('foundation', 'backend', 'post', 'display', 'vbe', 'vbe-cli', 'boing-cli', 'post-timing', 'record', 'profile', 'deadline', 'bustrap', 'abortprobe'), default='foundation')
     parser.add_argument('--post-source', choices=('card', 'file'), default='card')
     parser.add_argument('--port', type=int, default=2345)
     parser.add_argument('--jit-kb', type=int, choices=(0, 16384), default=0,
@@ -99,9 +99,9 @@ def main():
         inputs.append(artifact)
         commands.append('PCIoprom --no-post >SYS:pcioprom.txt')
         commands.append('PCIoprom --no-post SYS:card.rom >SYS:pcioprom-file.txt')
-    if args.suite in ('backend', 'display', 'vbe', 'deadline', 'bustrap'):
+    if args.suite in ('backend', 'display', 'vbe', 'deadline', 'bustrap', 'abortprobe'):
         name = {'backend': 'hardware-test', 'display': 'post-test', 'vbe': 'vbe-native-test', 'deadline': 'deadline-native-test',
-                'bustrap': 'bustrap-test'}[args.suite]
+                'bustrap': 'bustrap-test', 'abortprobe': 'abortprobe'}[args.suite]
         artifact = ROOT / 'build' / name
         shutil.copy2(current(artifact), guest / name)
         inputs.append(artifact)

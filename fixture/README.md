@@ -40,6 +40,7 @@ allocated into the legacy VGA area, and has no RTG driver. Suites:
 | `post`, `vbe-cli`, `boing-cli` | `PCIoprom` POST, mode sequence, pattern or Boing Ball |
 | `post-timing`, `record`, `profile`, `deadline` | measurement and recording runs |
 | `bustrap` | `bustrap-test`: the bus-error trap handler with hand-built exception frames; needs no `--rom` |
+| `abortprobe` | `abortprobe`: what the bridge does with a PCI cycle no device claims (all-ones, or a bus error with `--master-abort`) |
 
 `run_guest.py` launches the emulator headless with a time limit and archives
 the previous reports; `done.txt` only proves script completion. A leftover

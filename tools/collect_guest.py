@@ -37,6 +37,7 @@ def collect(dest, suite):
         'profile': {},
         'deadline': {'deadline-native-test.txt':'DEADLINE RESULT'},
         'bustrap': {'bustrap-test.txt': 'BUSTRAP RESULT'},
+        'abortprobe': {'abortprobe.txt': 'ABORTPROBE RESULT'},
     }[suite]
     scanners = ('post-record.txt',) if suite in ('record', 'profile') else ('post-timing.txt',) if suite == 'post-timing' else (suite+'.txt',) if suite in ('vbe-cli','boing-cli') else ('post.txt',) if suite == 'post' else ('pcioprom.txt', 'pcioprom-file.txt') if suite == 'foundation' else ()
     launch = json.loads((dest / 'launch.json').read_text())
@@ -63,7 +64,7 @@ def collect(dest, suite):
                               'library-test', 'pciinit-test', 'allocation-test',
                               'hardware-test', 'post-test',
                               'vbe-native-test', 'vbe-api-test', 'vbe-parse-test', 'post-timing', 'post-record',
-                              'bustrap-test'):
+                              'bustrap-test', 'abortprobe'):
             actual = dest / 'guest' / source.name
         elif (dest / 'roms/s3virge.rom').exists() and sha(dest / 'roms/s3virge.rom') == digest:
             actual = dest / 'roms/s3virge.rom'
@@ -179,7 +180,7 @@ def collect(dest, suite):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--suite', choices=('foundation', 'backend', 'post', 'display', 'vbe', 'vbe-cli', 'boing-cli', 'post-timing', 'record', 'profile', 'deadline', 'bustrap'), default='foundation')
+    parser.add_argument('--suite', choices=('foundation', 'backend', 'post', 'display', 'vbe', 'vbe-cli', 'boing-cli', 'post-timing', 'record', 'profile', 'deadline', 'bustrap', 'abortprobe'), default='foundation')
     parser.add_argument('--output', type=Path, default=ROOT / 'fixture/out/guest-test/foundation',
                         help='output path prefix for JSON and text reports')
     args = parser.parse_args()
