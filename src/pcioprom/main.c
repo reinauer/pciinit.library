@@ -1,6 +1,7 @@
 #include <proto/exec.h>
 #include <exec/tasks.h>
 #include <exec/memory.h>
+#include <utility/hooks.h>
 #include <proto/pciinit.h>
 #include "private/openpci_calls.h"
 #include <stdio.h>
@@ -11,6 +12,7 @@
 #include "private/pattern.h"
 #include "private/boing.h"
 #include "private/oprom_config.h"
+#include "private/accesslog.h"
 struct Library *PCIInitBase;
 static const char *status_name(uint32_t status)
 {
@@ -36,7 +38,33 @@ static uint32_t service_entries[32];
 static struct PCIInitServiceLog services = {sizeof(services), 32, 0, service_entries};
 static uint32_t modes[16];
 static unsigned mode_count;
-static const char *rom_path, *config_path, *dump_path;
+static const char *rom_path, *config_path, *dump_path, *log_path;
+/* --log: every card access of each POST and BIOS call, through an access
+ * hook that exists only then, so runs without --log are unaffected. */
+static struct AccessLog *access_log;
+static FILE *log_file;
+static int log_failed;
+static ULONG log_entry(struct Hook *hook __asm("a0"), APTR object __asm("a2"), struct PCIInitAccessMsg *m __asm("a1"))
+{
+    (void)hook;
+    (void)object;
+    /* Writes as they go out, reads with the value that came back. */
+    if (m->size == sizeof(*m) && (m->phase == PI_PHASE_AFTER || m->write))
+        accesslog_add(access_log, m->space, m->bar, m->offset, m->width, m->write, m->value);
+    return PI_HOOK_PASS;
+}
+static struct Hook log_hook = {{NULL, NULL}, (ULONG (*)())(APTR)log_entry, NULL, NULL};
+static void log_mark(const char *label)
+{
+    if (access_log)
+        accesslog_mark(access_log, label);
+}
+/* Between library calls only: the log is written with DOS. */
+static void log_flush(void)
+{
+    if (access_log && accesslog_write(access_log, log_file))
+        log_failed = 1;
+}
 static int arguments(int argc, char **argv)
 {
     int i;
@@ -57,6 +85,10 @@ static int arguments(int argc, char **argv)
             if (++i == argc || config_path)
                 return 0;
             config_path = argv[i];
+        } else if (!strcmp(argv[i], "--log")) {
+            if (++i == argc || log_path)
+                return 0;
+            log_path = argv[i];
         } else if (!strcmp(argv[i], "--dump")) {
             if (++i == argc || dump_path)
                 return 0;
@@ -157,6 +189,7 @@ static uint32_t graphics(PCIInitContext *ctx)
     unsigned i;
     if (!list_modes && !mode_count)
         return PI_OK;
+    log_mark("VBE controller and mode information");
     status = GetVBEInfo(ctx, &info);
     if (status)
         return status;
@@ -172,6 +205,11 @@ static uint32_t graphics(PCIInitContext *ctx)
                    (ULONG)mi.attributes, (ULONG)mi.framebuffer_pci);
         }
     for (i = 0; i < mode_count; ++i) {
+        {
+            char label[32];
+            snprintf(label, sizeof(label), "mode 0x%03lx", (ULONG)modes[i]);
+            log_mark(label);
+        }
         status = GetVBEModeInfo(ctx, modes[i], &mi);
         if (status)
             return status;
@@ -294,22 +332,20 @@ static __attribute__((noinline)) int run_main(int argc, char **argv)
     struct PCIInitTraceEntry trace[128];
     struct PCIInitDiagnostics diag = {.size = sizeof(diag)};
     struct X86Limits limits        = {sizeof(limits), 10000000, 30000000, 300000, NULL};
-    struct TagItem context_tags[]  = {{PII_Error, (ULONG)&status},
-                                      {PII_Hardware, 1},
-                                      {PII_Diagnostics, (ULONG)&diag},
-                                      {PII_Limits, (ULONG)&limits},
-                                      {TAG_IGNORE, (ULONG)&services},
-                                      {TAG_IGNORE, 1},
-                                      {TAG_DONE, 0}};
+    struct TagItem context_tags[]  = {{PII_Error, (ULONG)&status},     {PII_Hardware, 1},
+                                      {PII_Diagnostics, (ULONG)&diag}, {PII_Limits, (ULONG)&limits},
+                                      {TAG_IGNORE, (ULONG)&services},  {TAG_IGNORE, 1},
+                                      {TAG_IGNORE, (ULONG)&log_hook},  {TAG_DONE, 0}};
     if (!arguments(argc, argv)) {
         puts(
             "Usage: PCIoprom [--no-post | --list-modes] [--mode number ...] [--pattern] [--trace] [--services] "
-            "[--release-vga] [--config file] [--dump file] [ROM-file]");
+            "[--release-vga] [--log file] [--config file] [--dump file] [ROM-file]");
         puts("Modes accept decimal or 0x-prefixed hex; --pattern requires --mode.");
         puts("--dump writes the first card ROM, as read from the card, to file.");
         puts("--trace lists the last 128 I/O, VGA, BAR and interrupt accesses after each run.");
         puts("--services lets missing BIOS services fail instead of stopping, and lists them.");
         puts("--release-vga leaves each card with VGA ports and memory decode off after use.");
+        puts("--log writes every card access of POST and the BIOS calls to file; runs are slower.");
         puts("Direct-color modes show a Boing Ball by default; --pattern draws test bars.");
         puts("ENV:/ENVARC:" OPROM_CONFIG_NAME " holds 'Ignore vendor:device' lines (device may be *).");
         return 20;
@@ -332,6 +368,19 @@ static __attribute__((noinline)) int run_main(int argc, char **argv)
         puts("Cannot open openpci.library 14");
         CloseLibrary(PCIInitBase);
         return 20;
+    }
+    if (log_path) {
+        context_tags[6].ti_Tag = PII_AccessHook;
+        access_log             = accesslog_create();
+        log_file               = access_log ? fopen(log_path, "w") : NULL;
+        if (!log_file || fprintf(log_file, "; PCIoprom access log\n") < 0 || accesslog_legend(log_file)) {
+            printf("Cannot write %s\n", log_path);
+            if (log_file)
+                fclose(log_file);
+            log_file = NULL;
+            failed   = 1;
+            goto out;
+        }
     }
     config_source = oprom_config_load(&config, config_path);
     if (config_path && !config_source) {
@@ -402,13 +451,20 @@ static __attribute__((noinline)) int run_main(int argc, char **argv)
         if (ctx) {
             memset(&diag.registers, 0, sizeof(diag.registers));
             diag.count = diag.io_accesses = diag.vga_accesses = diag.bar_accesses = diag.int10_vector = 0;
+            if (log_file && fprintf(log_file, "\n; card %04x:%04x at %lu:%lu.%lu\n", dev->vendor, dev->device,
+                                    op_attr(pci, dev, PRM_BusNumber), op_attr(pci, dev, PRM_SlotNumber),
+                                    op_attr(pci, dev, PRM_FunctionNumber)) < 0)
+                log_failed = 1;
+            log_mark("POST");
             status = RunOptionROM(ctx, image);
+            log_flush();
             printf("  POST: %s\n", status_name(status));
             if (report(ctx, &diag))
                 ++blocked;
             if (status == PI_OK) {
                 ++initialized;
                 status = graphics(ctx);
+                log_flush();
                 if (!status && (list_modes || mode_count))
                     legacy_line(ctx, " after BIOS calls");
                 if (status) {
@@ -433,6 +489,14 @@ static __attribute__((noinline)) int run_main(int argc, char **argv)
             FreeOptionROM(image);
     }
 out:
+    if (log_file) {
+        if (fclose(log_file) || log_failed) {
+            printf("Cannot write %s\n", log_path);
+            ++failed;
+        } else
+            printf("Access log: %s\n", log_path);
+    }
+    accesslog_free(access_log);
     if (file)
         FreeOptionROM(file);
     CloseLibrary(pci);

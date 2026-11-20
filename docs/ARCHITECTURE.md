@@ -381,6 +381,7 @@ PCIoprom --no-post
 PCIoprom --no-post --dump ram:card.rom
 PCIoprom --list-modes
 PCIoprom --release-vga
+PCIoprom --log RAM:access.log --mode 0x111
 PCIoprom --mode 0x111 --pattern
 PCIoprom --mode 0x111 --mode 0x114 --mode 0x111 --pattern
 ```
@@ -396,6 +397,19 @@ other I/O ports and VGA memory, repeated after mode calls; a driver can
 tell from it whether its card needs the bus board's I/O window or legacy
 VGA after POST. `--release-vga` creates the contexts with
 `PII_ReleaseVGA`, leaving each card without legacy VGA decode afterwards.
+
+`--log file` records every card access of each POST and BIOS call through
+an access hook that PCIoprom installs only with that option, so other runs
+take the library's inline access path unchanged. Entries collect in memory
+and are written between library calls, since DOS must not be called while
+the ROM runs. Each line holds direction, space (I/O port, VGA memory
+address, BAR offset, configuration register), width and value, the value a
+read returned included; a repeated access at one address and a fill of one
+value at rising addresses become one line with a count. Section headings
+mark POST and the BIOS calls of each mode. The file shows which registers
+a ROM programs with which values, as material for native initialization
+code; delays the ROM times with the PIT are not card accesses and do not
+appear. A ViRGE POST of 2.2 million accesses gives about 5,900 lines.
 
 Mode options initialize a context and run every operation within that
 invocation. Direct-color modes show a centered red-and-white Boing Ball on

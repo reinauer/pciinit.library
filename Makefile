@@ -205,7 +205,7 @@ check-pciinit: build/pciinit-test
 # PCIoprom formats no floating-point values; newlib's integer-only printf
 # family leaves out 33 KiB of conversion code.
 PCIOPROM_STDIO = -Dprintf=iprintf -Dsnprintf=sniprintf
-build/PCIoprom: src/pcioprom/main.c build/pcioprom-boing.o build/pcioprom-config.o include/proto/pciinit.h include/inline/pciinit.h include/private/pattern.h include/private/boing.h include/private/oprom_config.h
+build/PCIoprom: src/pcioprom/main.c build/pcioprom-boing.o build/pcioprom-config.o build/pcioprom-accesslog.o include/proto/pciinit.h include/inline/pciinit.h include/private/pattern.h include/private/boing.h include/private/oprom_config.h include/private/accesslog.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(PCIOPROM_STDIO) $(filter %.c %.o,$^) -lm -o $@
 
 build/pcioprom-boing.o: src/pcioprom/boing.c include/private/boing.h
@@ -215,6 +215,23 @@ build/pcioprom-boing.o: src/pcioprom/boing.c include/private/boing.h
 build/pcioprom-config.o: src/pcioprom/config.c include/private/oprom_config.h
 	mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(PCIOPROM_STDIO) -c $< -o $@
+
+build/pcioprom-accesslog.o: src/pcioprom/accesslog.c include/private/accesslog.h include/libraries/pciinit.h
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(PCIOPROM_STDIO) -c $< -o $@
+
+build/host-accesslog-test: tests/accesslog.c src/pcioprom/accesslog.c include/private/accesslog.h include/libraries/pciinit.h
+	$(HOSTCC) -Iinclude -O2 -Wall -Wextra -Werror $(filter %.c,$^) -o $@
+
+build/accesslog-test: tests/accesslog.c build/pcioprom-accesslog.o
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c %.o,$^) -o $@
+
+.PHONY: check-accesslog
+check-accesslog: build/host-accesslog-test build/accesslog-test
+	build/host-accesslog-test
+	$(VAMOS) -S --vols-base-dir $(CURDIR)/build/vamos-accesslog -q -C 68020 -s 128 -m 16384 -H disable build/accesslog-test
+
+check: check-accesslog
 
 build/host-oprom-config-test: tests/oprom_config.c src/pcioprom/config.c include/private/oprom_config.h
 	$(HOSTCC) -Iinclude -O2 -Wall -Wextra -Werror $(filter %.c,$^) -o $@

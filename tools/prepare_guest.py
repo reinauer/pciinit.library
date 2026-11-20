@@ -21,7 +21,7 @@ def main():
                         help='emulated bus board; only FireStorm reaches legacy VGA memory')
     parser.add_argument('--openpci', type=Path, default=ROOT / 'fixture/out/pinned-openpci.library',
                         help='openpci.library binary to install in the guest')
-    parser.add_argument('--suite', choices=('foundation', 'backend', 'post', 'display', 'vbe', 'vbe-cli', 'boing-cli', 'post-timing', 'record', 'profile', 'deadline', 'bustrap', 'abortprobe'), default='foundation')
+    parser.add_argument('--suite', choices=('foundation', 'backend', 'post', 'display', 'vbe', 'vbe-cli', 'boing-cli', 'post-timing', 'record', 'profile', 'deadline', 'bustrap', 'abortprobe', 'log'), default='foundation')
     parser.add_argument('--post-source', choices=('card', 'file'), default='card')
     parser.add_argument('--port', type=int, default=2345)
     parser.add_argument('--jit-kb', type=int, choices=(0, 16384), default=0,
@@ -107,6 +107,8 @@ def main():
         inputs.append(artifact)
         argument = ' masterabort' if args.master_abort and name == 'hardware-test' else ''
         commands = commands[:4] + [f'{name}{argument} >SYS:{name}.txt']
+    elif args.suite == 'log':
+        commands = commands[:4] + ['PCIoprom --log SYS:access.log --mode 0x111 >SYS:log.txt']
     elif args.suite in ('vbe-cli', 'boing-cli'):
         extra = ' --pattern' if args.suite == 'vbe-cli' else ''
         commands = commands[:4] + [f'PCIoprom --list-modes --mode 0x111 --mode 0x114 --mode 0x112 --mode 0x110 --mode 0x111{extra} >SYS:{args.suite}.txt']
