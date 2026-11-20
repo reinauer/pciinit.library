@@ -80,6 +80,10 @@ static uint32_t access(uint32_t command, uint32_t owned, volatile void *address,
 {
     uint32_t result = 0, before;
     Disable();
+    /* With the owned decode on, one valid read maps the window first: a
+     * Mediator moves it through an MMU access fault, which must reach
+     * MMULib rather than the probe's handler. */
+    (void)*(volatile uint8_t *)address;
     ap_old  = *vector;
     *vector = (APTR)ap_handler;
     CacheClearU();
@@ -106,8 +110,8 @@ static uint32_t access(uint32_t command, uint32_t owned, volatile void *address,
     return result;
 }
 
-static void probe(const char *what, unsigned space, uint32_t command, uint32_t owned, uint32_t address,
-                  unsigned width, int write, int control)
+static void probe(const char *what, unsigned space, uint32_t command, uint32_t owned, uint32_t address, unsigned width,
+                  int write, int control)
 {
     int faulted;
     uint32_t mask = width == 4 ? 0xffffffffU : (1U << (8 * width)) - 1, value;
@@ -154,9 +158,9 @@ int main(int argc, char **argv)
     int force = argc > 1 && !strcmp(argv[1], "FORCE"), owner = 0;
     /* Without 68060.library exec reports a 68060 as a 68040. */
     printf("AbortProbe: CPU %s, ", (sys->AttnFlags & (1 << AFB_68060)) ? "68060"
-                                   : (sys->AttnFlags & AFF_68040)       ? "68040 or 68060"
-                                   : (sys->AttnFlags & AFF_68030)       ? "68030"
-                                                                        : "68020");
+                                   : (sys->AttnFlags & AFF_68040)      ? "68040 or 68060"
+                                   : (sys->AttnFlags & AFF_68030)      ? "68030"
+                                                                       : "68020");
     pci = op_open(sys);
     if (!pci) {
         printf("no openpci.library\n");
